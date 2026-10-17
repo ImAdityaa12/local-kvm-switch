@@ -3,6 +3,8 @@
 One keyboard, mouse and IEM on the gaming PC; choose whether they work on the gaming PC or on a laptop
 over the local network, and route audio both ways. Spec: [`docs/spec.md`](docs/spec.md).
 
+**To set it up on your gaming PC and laptop, follow [`docs/SETUP.md`](docs/SETUP.md).**
+
 **Status: Phase 3 (both audio directions), awaiting two-machine tests.** Pairing, the encrypted
 link between the two agents, Deskflow-based input switching, laptop audio to the gaming PC, and the
 gaming PC microphone to a selectable laptop microphone (via VB-CABLE) are built and tested on one
