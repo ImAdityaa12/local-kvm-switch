@@ -1,0 +1,59 @@
+// Adapter contracts. Input and audio are separate so that an audio failure
+// cannot touch the input path, and so audio never installs input hooks.
+
+import type {
+  AgentError,
+  AudioDevice,
+  AudioFormat,
+  EngineKind,
+  InputState,
+  RouteId,
+  VirtualEndpointState,
+} from "../../lib/protocol/index.ts";
+
+export class EngineError extends Error {
+  readonly detail: AgentError;
+  constructor(detail: AgentError) {
+    super(detail.message);
+    this.detail = detail;
+  }
+}
+
+export type InputReport = Pick<InputState, "target" | "engine" | "hooksActive" | "clientConnected">;
+
+export interface InputEngine {
+  readonly kind: EngineKind;
+  readonly hotkey?: string;
+  /**
+   * Start sharing and move control to the laptop. Resolves only once the engine
+   * confirms the laptop is the active screen.
+   */
+  activateRemote(): Promise<void>;
+  /**
+   * Stop sharing entirely: no forwarding, no global hooks. Resolves only once the
+   * engine process has exited (or never started).
+   */
+  deactivate(): Promise<void>;
+  /** Engine-observed state changes, including unexpected exits. */
+  onReport(cb: (report: InputReport, error?: AgentError) => void): void;
+}
+
+export interface PeerLinkEvents {
+  onLink(cb: (online: boolean, error?: AgentError) => void): void;
+}
+
+export interface AudioEngine {
+  readonly kind: EngineKind;
+  listDevices(): Promise<{ playback: AudioDevice[]; capture: AudioDevice[] }>;
+  virtualEndpoint(): Promise<VirtualEndpointState>;
+  /** Resolves with the negotiated format once audio is confirmed flowing end to end. */
+  start(route: RouteId, deviceId: string | null): Promise<AudioFormat>;
+  /** Ramps to silence before stopping to avoid pops. */
+  stop(route: RouteId): Promise<void>;
+  setVolume(route: RouteId, volume: number): void;
+  setMuted(route: RouteId, muted: boolean): void;
+  /** Peak level per metering window, in dBFS. */
+  onLevel(cb: (route: RouteId, levelDb: number) => void): void;
+  /** A running stream failed (peer gone, device removed). */
+  onFault(cb: (route: RouteId, error: AgentError) => void): void;
+}

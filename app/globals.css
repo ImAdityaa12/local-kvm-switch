@@ -1,26 +1,180 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
+/* Follows the OS theme. */
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+/*
+  One ground, one ink, one accent. The accent is the "this machine has the
+  keyboard" light and is used for the active target and live routes only.
+  Surfaces are separated by tone steps, not lines or shadows.
+*/
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ground: #eeede8;
+  --surface-1: #e2e1db;
+  --surface-2: #d5d4cd;
+  --ink: #141412;
+  --ink-2: #4f4e49;
+  --live: #0d6e38;
+  --live-ink: #ffffff;
+  --live-soft: #cfe5d6;
+  --warn: #8a5300;
+  --warn-field: #f1dcb0;
+  --danger: #a8231a;
+  --danger-field: #f3d2cc;
+
+  --background: var(--ground);
+  --foreground: var(--ink);
+  --card: var(--surface-1);
+  --card-foreground: var(--ink);
+  --popover: var(--ground);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--ground);
+  --secondary: var(--surface-1);
+  --secondary-foreground: var(--ink);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--ink-2);
+  --accent: var(--surface-2);
+  --accent-foreground: var(--ink);
+  --destructive: var(--danger);
+  --border: var(--surface-2);
+  --input: #bdbcb4;
+  --ring: var(--live);
+  --radius: 0rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #111210;
+    --surface-1: #1b1c1a;
+    --surface-2: #262724;
+    --ink: #f0efea;
+    --ink-2: #a3a29b;
+    --live: #5fd38c;
+    --live-ink: #07150c;
+    --live-soft: #173323;
+    --warn: #f0b44c;
+    --warn-field: #33270f;
+    --danger: #ff8170;
+    --danger-field: #3a1713;
+    --input: #3a3b37;
+  }
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-ground: var(--ground);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-live: var(--live);
+  --color-live-ink: var(--live-ink);
+  --color-live-soft: var(--live-soft);
+  --color-warn: var(--warn);
+  --color-warn-field: var(--warn-field);
+  --color-danger: var(--danger);
+  --color-danger-field: var(--danger-field);
+  --font-sans: var(--font-text);
+  --font-heading: var(--font-text);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --radius-4xl: var(--radius);
+
+  /* Three working sizes plus the target names. */
+  --text-target: clamp(3rem, 7.4vw, 7.5rem);
+  --text-title: clamp(1.75rem, 2.6vw, 2.5rem);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+    font-feature-settings: "tnum" 1;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+  ::selection {
+    background: var(--live);
+    color: var(--live-ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--live);
+    outline-offset: 3px;
+  }
+  kbd {
+    font-family: inherit;
+    font-weight: 600;
+    padding: 0.05em 0.45em;
+    background: var(--surface-2);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Motion: transform and opacity only, never hiding content without script. */
+@media (prefers-reduced-motion: no-preference) {
+  .rise {
+    animation: rise 640ms var(--ease-out-quint) both;
+    animation-delay: calc(var(--i, 0) * 70ms);
+  }
+  .pulse-dot {
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  .press {
+    transition: transform 160ms var(--ease-out-quint), background-color 200ms ease, color 200ms ease;
+  }
+  .press:active:not(:disabled) {
+    transform: scale(0.985);
+  }
+  .meter-fill {
+    transition: transform 110ms linear;
+  }
+  .target-name {
+    transition: transform 420ms var(--ease-out-quint);
+  }
+  [data-active="true"] .target-name {
+    transform: translateX(0.04em);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
 }
