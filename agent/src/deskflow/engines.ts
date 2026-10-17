@@ -28,6 +28,7 @@ import {
   settingsIni,
 } from "./config.ts";
 import { CoreProcess } from "./process.ts";
+import { preflight } from "./preflight.ts";
 
 export type CursorEvent = "enter" | "leave";
 
@@ -126,6 +127,8 @@ export class DeskflowServerInput implements InputEngine {
     const cancelled = () => {
       if (gen !== this.#gen) throw new EngineError({ code: "engine-crashed", message: "Switch cancelled" });
     };
+    // Check our own side first, so a missing install is reported for this machine.
+    if (!this.#p.exePrefixArgs) await preflight(this.#p.exe);
     this.#report({ step: "waiting-for-laptop" });
     await this.#peer.request({ op: "input.prepare" });
     cancelled();
@@ -235,6 +238,7 @@ export class DeskflowClient {
 
   async start(): Promise<void> {
     if (this.#proc?.running) return;
+    if (!this.#p.exePrefixArgs) await preflight(this.#p.exe);
     this.#set({ engine: "starting" });
     const settings = writeFiles(this.#p, "client");
     this.#stopping = false;

@@ -17,6 +17,7 @@ import { Controller, type Pairing } from "./controller.ts";
 import { EngineError, type AudioEngine, type InputEngine, type InputReport } from "./engines.ts";
 import { DESKFLOW_SERVER_PORT, DESKFLOW_TUNNEL_PORT } from "./deskflow/config.ts";
 import { DeskflowClient, DeskflowServerInput, type CursorEvent, type DeskflowPaths } from "./deskflow/engines.ts";
+import { preflight } from "./deskflow/preflight.ts";
 import { NullAudio } from "./null-audio.ts";
 import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudio, MIC_SEND_PORT, MIC_TUNNEL_PORT } from "./audio/engine.ts";
 import { helperPath } from "./audio/helper.ts";
@@ -310,6 +311,10 @@ async function buildReal(): Promise<Built> {
   }, 15_000);
 
   store.log("info", `Agent started as the ${machine === "gaming-pc" ? "gaming PC" : "laptop"}.`);
+  // Say early what would make switching fail later.
+  await preflight(paths.exe).catch((e) => {
+    if (e instanceof EngineError) store.log("warn", `${e.detail.message} ${e.detail.hint ?? ""}`.trim());
+  });
   return {
     store,
     controller,
