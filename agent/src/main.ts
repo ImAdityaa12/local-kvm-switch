@@ -18,7 +18,7 @@ import { EngineError, type AudioEngine, type InputEngine, type InputReport } fro
 import { DESKFLOW_SERVER_PORT, DESKFLOW_TUNNEL_PORT } from "./deskflow/config.ts";
 import { DeskflowClient, DeskflowServerInput, type CursorEvent, type DeskflowPaths } from "./deskflow/engines.ts";
 import { NullAudio } from "./null-audio.ts";
-import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudioSender } from "./audio/engine.ts";
+import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudio, MIC_SEND_PORT, MIC_TUNNEL_PORT } from "./audio/engine.ts";
 import { helperPath } from "./audio/helper.ts";
 import { LINK_PORT, PeerLink, type PeerRequest } from "./peer/link.ts";
 import { PairingManager } from "./peer/manager.ts";
@@ -152,8 +152,8 @@ async function buildReal(): Promise<Built> {
   // Assigned below; the audio engine only calls it after the link exists.
   let requestPeer: (r: PeerRequest) => Promise<void> = () => Promise.reject(new EngineError({ code: "peer-unreachable", message: "No link yet" }));
   // Only the gaming PC owns audio routes; the laptop sends when asked.
-  const audio: AudioEngine =
-    machine === "gaming-pc" && haveHelper ? new HelperAudio(helperExe, { request: (r) => requestPeer(r) }) : new NullAudio();
+  const helperAudio = machine === "gaming-pc" && haveHelper ? new HelperAudio(helperExe, { request: (r) => requestPeer(r) }) : null;
+  const audio: AudioEngine = helperAudio ?? new NullAudio();
   const devices = await audio.listDevices().catch(() => ({ playback: [], capture: [] }));
   const lanAddress = machine === "gaming-pc" ? (values.bind ?? privateIPv4()) : null;
   if (machine === "gaming-pc") {
@@ -171,7 +171,8 @@ async function buildReal(): Promise<Built> {
     devices,
     events: [],
   });
-  const sender = machine === "laptop" && haveHelper ? new LaptopAudioSender(helperExe, (l, m) => store.log(l, m)) : null;
+  const laptopAudio =
+    machine === "laptop" && haveHelper ? new LaptopAudio(helperExe, (l, m) => store.log(l, m), (evt) => link.emit(evt)) : null;
   if (!haveHelper) store.log("warn", "The audio helper is not built, so audio routing is unavailable. Run npm run build:audio.");
 
   const paths = deskflowPaths();
@@ -209,12 +210,13 @@ async function buildReal(): Promise<Built> {
     trust: () => trust.load(),
     bind: lanAddress ?? undefined,
     port: LINK_PORT,
-    tunnelTargets: machine === "gaming-pc" ? { deskflow: DESKFLOW_SERVER_PORT, audio: AUDIO_PLAY_PORT } : undefined,
+    tunnelTargets: machine === "gaming-pc" ? { deskflow: DESKFLOW_SERVER_PORT, audio: AUDIO_PLAY_PORT, mic: MIC_SEND_PORT } : undefined,
     tunnelListeners:
       machine === "laptop"
         ? [
             { name: "deskflow", localPort: DESKFLOW_TUNNEL_PORT },
             { name: "audio", localPort: AUDIO_TUNNEL_PORT },
+            { name: "mic", localPort: MIC_TUNNEL_PORT },
           ]
         : undefined,
     onLink: (online, info) => {
@@ -225,12 +227,14 @@ async function buildReal(): Promise<Built> {
         });
       }
       events.fire(online, info.error);
+      if (online) void laptopAudio?.announceEndpoint();
     },
     onRequest: async (req) => {
       if (machine !== "laptop") throw new EngineError({ code: "not-supported", message: "Only the laptop takes these requests." });
-      if (req.op === "audio.start" || req.op === "audio.stop") {
-        if (!sender) throw new EngineError({ code: "engine-missing", message: "The audio helper is not built on the laptop.", hint: "Run npm run build:audio on the laptop." });
-        return req.op === "audio.start" ? sender.start() : sender.stop();
+      if (req.op === "audio.start" || req.op === "audio.stop" || req.op === "audio.volume") {
+        if (!laptopAudio) throw new EngineError({ code: "engine-missing", message: "The audio helper is not built on the laptop.", hint: "Run npm run build:audio on the laptop." });
+        if (req.op === "audio.volume") return laptopAudio.setMicVolume(req.volume);
+        return req.op === "audio.start" ? laptopAudio.start(req.route, req.volume) : laptopAudio.stop(req.route);
       }
       if (req.op === "input.prepare") await client!.start();
       else await client!.stop();
@@ -244,7 +248,23 @@ async function buildReal(): Promise<Built> {
       }
     },
     onEvent: (evt) => {
-      if (evt.engine === "error") store.log("error", "Deskflow could not start on the laptop");
+      if (evt.op === "input.status") {
+        if (evt.engine === "error") store.log("error", "Deskflow could not start on the laptop");
+        return;
+      }
+      if (!helperAudio) return;
+      if (evt.op === "audio.endpoint") {
+        const ep = { present: evt.present, name: evt.name ?? undefined, isDefault: evt.isDefault };
+        helperAudio.setEndpoint(ep);
+        const before = store.state.audio.micToLaptop.virtualEndpoint;
+        if (JSON.stringify(before) !== JSON.stringify(ep)) {
+          store.update((s) => {
+            s.audio.micToLaptop.virtualEndpoint = ep;
+          });
+        }
+        return;
+      }
+      helperAudio.remoteStatus(evt);
     },
   });
 
@@ -278,7 +298,9 @@ async function buildReal(): Promise<Built> {
   // Devices come and go (USB DACs, HDMI); keep the list current without ever
   // changing the selected device on our own.
   const refresh = setInterval(async () => {
-    if (machine !== "gaming-pc" || !haveHelper) return;
+    // The laptop re-reports its virtual microphone (VB-CABLE can be installed or removed).
+    if (machine === "laptop") return void (link.online && laptopAudio?.announceEndpoint());
+    if (!haveHelper) return;
     const next = await audio.listDevices().catch(() => null);
     if (next && JSON.stringify(next) !== JSON.stringify(store.state.devices)) {
       store.update((s) => {
@@ -287,13 +309,14 @@ async function buildReal(): Promise<Built> {
     }
   }, 15_000);
 
-  store.log("info", `Agent started as the ${machine === "gaming-pc" ? "gaming PC" : "laptop"}. The microphone route arrives in Phase 3.`);
+  store.log("info", `Agent started as the ${machine === "gaming-pc" ? "gaming PC" : "laptop"}.`);
   return {
     store,
     controller,
     dispose: async () => {
       clearInterval(refresh);
-      await sender?.stop();
+      await laptopAudio?.stop("laptopToPc");
+      await laptopAudio?.stop("micToLaptop");
       await link.stop();
     },
   };

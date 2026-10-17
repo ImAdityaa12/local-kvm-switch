@@ -45,31 +45,20 @@ export function AudioSection({ state, send, now }: { state: AgentState; send: Se
           send={send}
           now={now}
         />
-        {state.agent.simulated ? (
-          <Route
-            id="micToLaptop"
-            index={2}
-            title="Gaming PC microphone to Laptop"
-            summary="Sends your IEM microphone to the laptop as a selectable microphone."
-            route={state.audio.micToLaptop}
-            devices={state.devices.capture}
-            deviceLabel="Microphone on this PC"
-            levelLabel="Microphone gain"
-            simulated={state.agent.simulated}
-            send={send}
-            now={now}
-            endpoint={state.audio.micToLaptop.virtualEndpoint}
-          />
-        ) : (
-          <article aria-labelledby="mic-later" className="rise flex flex-col justify-between gap-8 bg-surface-1 p-6 sm:p-8" style={{ "--i": 2 } as React.CSSProperties}>
-            <h3 id="mic-later" className="text-2xl leading-tight font-semibold tracking-[-0.02em]">
-              Gaming PC microphone to Laptop
-            </h3>
-            <p className="max-w-[48ch] text-lg text-ink-2">
-              Next phase. The laptop needs a virtual microphone (VB-CABLE, which you install yourself) before Discord can pick up your IEM mic.
-            </p>
-          </article>
-        )}
+        <Route
+          id="micToLaptop"
+          index={2}
+          title="Gaming PC microphone to Laptop"
+          summary={`Your IEM microphone appears on ${peerName} as ${state.audio.micToLaptop.virtualEndpoint.name ?? "a virtual microphone"}. Pick it in Discord.`}
+          route={state.audio.micToLaptop}
+          devices={state.devices.capture}
+          deviceLabel="Microphone on this PC"
+          levelLabel="Level on the laptop"
+          simulated={state.agent.simulated}
+          send={send}
+          now={now}
+          endpoint={state.audio.micToLaptop.virtualEndpoint}
+        />
       </div>
     </section>
   );
@@ -220,9 +209,12 @@ function Route({
         {endpoint ? (
           <Fact term="Laptop microphone endpoint">
             {endpoint.present ? (
-              <Status tone="live">{endpoint.name ?? "Present"}</Status>
+              <Status tone="live">
+                {endpoint.name ?? "Present"}
+                {endpoint.isDefault === false ? ". Not the laptop's default microphone; select it in your app." : ""}
+              </Status>
             ) : (
-              <Status tone="danger">Missing. Install a virtual audio cable on the laptop.</Status>
+              <Status tone="danger">Missing. Install VB-CABLE on the laptop, reboot, and restart its agent.</Status>
             )}
           </Fact>
         ) : (

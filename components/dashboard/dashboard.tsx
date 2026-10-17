@@ -158,10 +158,10 @@ function LaptopAudio() {
   return (
     <section aria-labelledby="audio-heading" className="rise mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" style={{ "--i": 2 } as React.CSSProperties}>
       <h2 id="audio-heading" className="text-title leading-tight font-semibold tracking-[-0.03em]">
-        Sound goes to the gaming PC
+        Sound goes both ways
       </h2>
       <p className="max-w-[60ch] text-lg text-ink-2">
-        When the gaming PC turns on its laptop audio route, this laptop sends everything it plays, unchanged, at its own mix format. The route is controlled from the gaming PC&apos;s dashboard.
+        When the gaming PC turns on its laptop audio route, this laptop sends everything it plays, unchanged. When it turns on the microphone route, your IEM mic plays into CABLE Input and apps here record it from CABLE Output. Both are controlled from the gaming PC&apos;s dashboard.
       </p>
     </section>
   );

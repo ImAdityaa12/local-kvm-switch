@@ -44,6 +44,20 @@ system-wide capture endpoint; new kernel drivers need Microsoft signing.
   real loopback capture and real device playback stream with no dropouts.
 - **Not done:** clock-drift correction (`RATEADJUST`); see `docs/phase2-testing.md`, Known limits.
 
+## Phase 3 implementation (2026-10-17)
+
+- Gaming PC: `kvm-audio send --listen 127.0.0.1:24830 --capture <mic>` captures the chosen microphone
+  at its mix format. **Mute is applied here**, so nothing audible leaves the gaming PC while muted.
+- Laptop: `kvm-audio play --connect 127.0.0.1:24831 --device <CABLE Input>`; port 24831 tunnels to
+  the gaming PC's tunnel target `mic`. Apps record from **CABLE Output**. Volume is applied here
+  (attenuation only, ramped).
+- The laptop finds VB-CABLE by device name ("CABLE Input" / "CABLE Output"), reports it to the gaming
+  PC on link-up and every 15 s, and the gaming PC refuses to start the route without it.
+- Guard: the laptop-audio route refuses to start if the laptop's default playback device is CABLE
+  Input, since loopback would then send the mic straight back to the IEM.
+- Verified on one machine (VB-CABLE installed, silent virtual source): the route streams at 48 kHz
+  stereo float with no conversion and no dropouts; mute at the sender produces exact zeros.
+
 ## Consequences
 
 - One reboot on the laptop for VB-CABLE. Organisations need VB-Audio licences.

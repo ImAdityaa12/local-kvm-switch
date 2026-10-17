@@ -1,42 +1,57 @@
-// Audio through the native helper.
+// Audio through the native helper. Both directions run inside the peer link's
+// TLS tunnels, and each helper only touches loopback addresses.
 //
-// Laptop audio → gaming PC: the gaming PC runs `kvm-audio play` on a loopback
-// port reachable only through the peer link's "audio" tunnel; the laptop runs
-// `kvm-audio send`, which captures the laptop's mix (WASAPI loopback) and
-// connects to its local end of that tunnel. Samples are sent as captured.
+// Laptop audio → gaming PC
+//   laptop:    kvm-audio send  --connect 127.0.0.1:24821  (loopback capture)  ──tunnel "audio"──►
+//   gaming PC: kvm-audio play  --listen  127.0.0.1:24820  --device <chosen output>
 //
-// The microphone direction is Phase 3.
+// Gaming PC microphone → laptop
+//   gaming PC: kvm-audio send  --listen  127.0.0.1:24830  --capture <chosen mic>  (mute applied here)
+//   laptop:    kvm-audio play  --connect 127.0.0.1:24831  --device <CABLE Input>   ──tunnel "mic"──►
+//   Apps on the laptop record from "CABLE Output".
 
-import type { AgentError, AudioFormat, RouteId, VirtualEndpointState } from "../../../lib/protocol/index.ts";
+import type { AgentError, AudioDevice, AudioFormat, RouteId, VirtualEndpointState } from "../../../lib/protocol/index.ts";
 import { EngineError, type AudioEngine, type RouteInfo } from "../engines.ts";
+import type { PeerEvent, PeerRequest } from "../peer/link.ts";
 import { HelperProcess, type HelperEvent } from "./helper.ts";
 
-/** Loopback port of the player on the gaming PC (tunnel target "audio"). */
+/** Loopback port of the laptop-audio player on the gaming PC (tunnel target "audio"). */
 export const AUDIO_PLAY_PORT = 24820;
 /** Loopback port on the laptop that tunnels to AUDIO_PLAY_PORT. */
 export const AUDIO_TUNNEL_PORT = 24821;
+/** Loopback port of the mic sender on the gaming PC (tunnel target "mic"). */
+export const MIC_SEND_PORT = 24830;
+/** Loopback port on the laptop that tunnels to MIC_SEND_PORT. */
+export const MIC_TUNNEL_PORT = 24831;
+
 const START_TIMEOUT_MS = 8_000;
+const VB_PLAYBACK = /^CABLE Input\b/i;
+const VB_RECORDING = /^CABLE Output\b/i;
 
 export interface AudioPeer {
-  request(req: { op: "audio.start"; route: "laptopToPc" } | { op: "audio.stop"; route: "laptopToPc" }): Promise<void>;
+  request(req: PeerRequest): Promise<void>;
 }
 
-function errorFrom(e: HelperEvent): AgentError {
+type Listed = AudioDevice & { mix: AudioFormat | null };
+
+function errorFrom(e: HelperEvent, what: "playback" | "microphone" = "playback"): AgentError {
   const code = e.code as AgentError["code"];
   const message = String(e.message ?? "Audio helper error");
   switch (code) {
     case "device-missing":
-      return { code, message: "The playback device is not available.", hint: "Reconnect it or choose another device." };
+      return { code, message: `The ${what} device is not available.`, hint: "Reconnect it or choose another device." };
     case "format-unsupported":
       return { code, message: `The audio format is not supported: ${message}` };
     case "engine-missing":
       return { code, message, hint: "Build it with npm run build:audio." };
+    case "peer-unreachable":
+      return { code, message: "The other machine's audio stream is not reachable" };
     default:
       return { code: "internal", message };
   }
 }
 
-function waitEvent(h: HelperProcess, event: string, ms: number): Promise<HelperEvent> {
+function waitEvent(h: HelperProcess, event: string, ms: number, what: "playback" | "microphone" = "playback"): Promise<HelperEvent> {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new EngineError({ code: "engine-timeout", message: `Audio did not arrive within ${ms / 1000}s` })), ms);
     h.on(event, (e) => {
@@ -45,7 +60,7 @@ function waitEvent(h: HelperProcess, event: string, ms: number): Promise<HelperE
     });
     h.on("error", (e) => {
       clearTimeout(t);
-      reject(new EngineError(errorFrom(e)));
+      reject(new EngineError(errorFrom(e, what)));
     });
     void h.exited.then(() => {
       clearTimeout(t);
@@ -54,14 +69,24 @@ function waitEvent(h: HelperProcess, event: string, ms: number): Promise<HelperE
   });
 }
 
-/** Gaming PC side. */
+async function stopHelper(h: HelperProcess | null): Promise<void> {
+  if (!h || !h.running) return;
+  h.stop(); // fades out over 10 ms, then exits
+  const timer = setTimeout(() => h.child.kill(), 2_000);
+  await h.exited;
+  clearTimeout(timer);
+}
+
+/** Gaming PC side: owns both routes. */
 export class HelperAudio implements AudioEngine {
   readonly kind = "wasapi" as const;
   #exe: string;
   #peer: AudioPeer;
-  #player: HelperProcess | null = null;
-  #volume = 0.8;
-  #muted = false;
+  #helpers: Partial<Record<RouteId, HelperProcess>> = {};
+  #live: Partial<Record<RouteId, boolean>> = {};
+  #volume: Record<RouteId, number> = { laptopToPc: 0.8, micToLaptop: 1 };
+  #muted: Record<RouteId, boolean> = { laptopToPc: false, micToLaptop: false };
+  #endpoint: VirtualEndpointState = { present: false, isDefault: null };
   #levelCb: (r: RouteId, db: number) => void = () => {};
   #faultCb: (r: RouteId, e: AgentError) => void = () => {};
   #statsCb: (r: RouteId, info: RouteInfo) => void = () => {};
@@ -73,87 +98,127 @@ export class HelperAudio implements AudioEngine {
 
   async listDevices() {
     const d = await HelperProcess.list(this.#exe);
-    const map = (x: { id: string; name: string; isDefault: boolean; mix: AudioFormat | null }) => ({ id: x.id, name: x.name, isDefault: x.isDefault, mix: x.mix });
+    const map = (x: Listed) => ({ id: x.id, name: x.name, isDefault: x.isDefault, mix: x.mix });
     return { playback: d.playback.map(map), capture: d.capture.map(map) };
   }
 
   async virtualEndpoint(): Promise<VirtualEndpointState> {
-    return { present: false, isDefault: null };
+    return this.#endpoint;
+  }
+
+  /** What the laptop last reported about its virtual microphone. */
+  setEndpoint(ep: VirtualEndpointState): void {
+    this.#endpoint = ep;
+  }
+
+  /** Mic-player health reported by the laptop. */
+  remoteStatus(evt: PeerEvent & { op: "audio.status" }): void {
+    if (evt.conversion !== undefined || evt.stats) this.#statsCb("micToLaptop", { conversion: evt.conversion, stats: evt.stats });
+    if (evt.error) this.#fault("micToLaptop", evt.error);
+  }
+
+  #fault(route: RouteId, err: AgentError): void {
+    if (this.#live[route]) {
+      this.#live[route] = false;
+      this.#faultCb(route, err);
+    }
   }
 
   async start(route: RouteId, deviceId: string | null): Promise<AudioFormat> {
-    if (route !== "laptopToPc") {
-      throw new EngineError({ code: "not-supported", message: "Sending the microphone to the laptop is not built yet.", hint: "It arrives in Phase 3." });
+    if (!deviceId) {
+      throw new EngineError({ code: "device-missing", message: route === "laptopToPc" ? "Choose a playback device first." : "Choose a microphone first." });
     }
-    if (!deviceId) throw new EngineError({ code: "device-missing", message: "Choose a playback device first." });
-    await this.#stopPlayer();
+    await this.#stopHelper(route);
+    return route === "laptopToPc" ? this.#startPlayback(deviceId) : this.#startMic(deviceId);
+  }
 
-    const args = ["play", "--listen", `127.0.0.1:${AUDIO_PLAY_PORT}`, "--device", deviceId, "--volume", String(this.#volume)];
-    if (this.#muted) args.push("--muted");
+  async #startPlayback(deviceId: string): Promise<AudioFormat> {
+    const route = "laptopToPc";
+    const args = ["play", "--listen", `127.0.0.1:${AUDIO_PLAY_PORT}`, "--device", deviceId, "--volume", String(this.#volume[route])];
+    if (this.#muted[route]) args.push("--muted");
     const player = HelperProcess.spawn(this.#exe, args);
-    this.#player = player;
+    this.#helpers[route] = player;
     let format: AudioFormat | null = null;
-    let live = false;
 
     player.on("format", (e) => {
       format = e.format as AudioFormat;
-      const device = e.device as AudioFormat;
-      this.#statsCb(route, { conversion: e.conversion ? { from: format, to: device } : null });
+      this.#statsCb(route, { conversion: e.conversion ? { from: format, to: e.device as AudioFormat } : null });
     });
     player.on("stats", (e) => {
       if (typeof e.peakDb === "number") this.#levelCb(route, e.peakDb);
       this.#statsCb(route, { stats: { bufferMs: Number(e.bufferMs), underruns: Number(e.underruns), droppedFrames: Number(e.droppedFrames) } });
     });
-    const fault = (err: AgentError) => {
-      if (live && this.#player === player) {
-        live = false;
-        this.#faultCb(route, err);
-      }
-    };
-    player.on("disconnected", () => fault({ code: "peer-unreachable", message: "The laptop stopped sending audio" }));
-    player.on("error", (e) => fault(errorFrom(e)));
-    void player.exited.then(() => fault({ code: "engine-crashed", message: "The audio player stopped" }));
+    player.on("disconnected", () => this.#fault(route, { code: "peer-unreachable", message: "The laptop stopped sending audio" }));
+    player.on("error", (e) => this.#fault(route, errorFrom(e)));
+    void player.exited.then(() => this.#fault(route, { code: "engine-crashed", message: "The audio player stopped" }));
 
     try {
       await waitEvent(player, "listening", START_TIMEOUT_MS);
       await this.#peer.request({ op: "audio.start", route });
       await waitEvent(player, "streaming", START_TIMEOUT_MS);
     } catch (e) {
-      await this.#stopPlayer();
+      await this.#stopHelper(route);
       this.#peer.request({ op: "audio.stop", route }).catch(() => {});
       throw e;
     }
-    live = true;
     if (!format) throw new EngineError({ code: "internal", message: "The audio player did not report its format" });
+    this.#live[route] = true;
     return format;
   }
 
+  async #startMic(deviceId: string): Promise<AudioFormat> {
+    const route = "micToLaptop";
+    if (!this.#endpoint.present) {
+      throw new EngineError({ code: "endpoint-missing", message: "The laptop has no virtual microphone.", hint: "Install VB-CABLE on the laptop and restart its agent." });
+    }
+    const args = ["send", "--listen", `127.0.0.1:${MIC_SEND_PORT}`, "--capture", deviceId];
+    if (this.#muted[route]) args.push("--muted");
+    const sender = HelperProcess.spawn(this.#exe, args);
+    this.#helpers[route] = sender;
+
+    sender.on("stats", (e) => {
+      if (typeof e.peakDb === "number") this.#levelCb(route, e.peakDb);
+    });
+    sender.on("error", (e) => this.#fault(route, errorFrom(e, "microphone")));
+    void sender.exited.then(() => this.#fault(route, { code: "peer-unreachable", message: "The microphone stream to the laptop ended" }));
+
+    let started: HelperEvent;
+    try {
+      await waitEvent(sender, "listening", START_TIMEOUT_MS, "microphone");
+      const streaming = waitEvent(sender, "streaming", START_TIMEOUT_MS, "microphone");
+      await this.#peer.request({ op: "audio.start", route, volume: this.#volume[route] });
+      started = await streaming;
+    } catch (e) {
+      await this.#stopHelper(route);
+      this.#peer.request({ op: "audio.stop", route }).catch(() => {});
+      throw e;
+    }
+    this.#live[route] = true;
+    return started.format as AudioFormat;
+  }
+
   async stop(route: RouteId): Promise<void> {
-    if (route !== "laptopToPc") return;
-    await this.#stopPlayer();
+    await this.#stopHelper(route);
     await this.#peer.request({ op: "audio.stop", route }).catch(() => {});
   }
 
-  async #stopPlayer(): Promise<void> {
-    const p = this.#player;
-    this.#player = null;
-    if (!p || !p.running) return;
-    p.stop(); // fades out over 10 ms, then exits
-    const timer = setTimeout(() => p.child.kill(), 2_000);
-    await p.exited;
-    clearTimeout(timer);
+  async #stopHelper(route: RouteId): Promise<void> {
+    this.#live[route] = false;
+    const h = this.#helpers[route] ?? null;
+    delete this.#helpers[route];
+    await stopHelper(h);
   }
 
   setVolume(route: RouteId, volume: number): void {
-    if (route !== "laptopToPc") return;
-    this.#volume = volume;
-    this.#player?.command({ cmd: "volume", value: volume });
+    this.#volume[route] = volume;
+    if (route === "laptopToPc") this.#helpers[route]?.command({ cmd: "volume", value: volume });
+    else if (this.#live[route]) this.#peer.request({ op: "audio.volume", route, volume }).catch(() => {});
   }
 
   setMuted(route: RouteId, muted: boolean): void {
-    if (route !== "laptopToPc") return;
-    this.#muted = muted;
-    this.#player?.command({ cmd: "mute", value: muted });
+    // For the mic this mutes at the source: nothing audible leaves the gaming PC.
+    this.#muted[route] = muted;
+    this.#helpers[route]?.command({ cmd: "mute", value: muted });
   }
 
   onLevel(cb: (r: RouteId, db: number) => void): void {
@@ -169,23 +234,73 @@ export class HelperAudio implements AudioEngine {
   }
 }
 
-/** Laptop side: runs the loopback sender while the gaming PC asks for it. */
-export class LaptopAudioSender {
+/** Laptop side: sends its audio and plays the gaming PC's mic into the virtual cable, when asked. */
+export class LaptopAudio {
   #exe: string;
-  #sender: HelperProcess | null = null;
   #log: (level: "info" | "warn" | "error", msg: string) => void;
+  #emit: (evt: PeerEvent) => void;
+  #sender: HelperProcess | null = null;
+  #micPlayer: HelperProcess | null = null;
 
-  constructor(exe: string, log: (level: "info" | "warn" | "error", msg: string) => void) {
+  constructor(exe: string, log: (level: "info" | "warn" | "error", msg: string) => void, emit: (evt: PeerEvent) => void) {
     this.#exe = exe;
     this.#log = log;
+    this.#emit = emit;
   }
 
-  async start(): Promise<void> {
-    await this.stop();
+  /** The virtual microphone apps can record from, if VB-CABLE is installed. */
+  async endpoint(): Promise<VirtualEndpointState & { playbackId: string | null }> {
+    const d = await HelperProcess.list(this.#exe);
+    const input = d.playback.find((x) => VB_PLAYBACK.test(x.name));
+    const output = d.capture.find((x) => VB_RECORDING.test(x.name));
+    if (!input || !output) return { present: false, isDefault: null, playbackId: null };
+    return { present: true, name: output.name, isDefault: output.isDefault, playbackId: input.id };
+  }
+
+  async announceEndpoint(): Promise<void> {
+    const ep = await this.endpoint().catch(() => null);
+    if (ep) this.#emit({ op: "audio.endpoint", present: ep.present, name: ep.name ?? null, isDefault: ep.isDefault });
+  }
+
+  async start(route: RouteId, volume?: number): Promise<void> {
+    if (route === "laptopToPc") return this.#startSend();
+    return this.#startMic(volume ?? 1);
+  }
+
+  async stop(route: RouteId): Promise<void> {
+    if (route === "laptopToPc") {
+      const s = this.#sender;
+      this.#sender = null;
+      await stopHelper(s);
+    } else {
+      const p = this.#micPlayer;
+      this.#micPlayer = null;
+      if (p?.running) this.#log("info", "Stopped playing the gaming PC microphone");
+      await stopHelper(p);
+    }
+  }
+
+  setMicVolume(volume: number): void {
+    this.#micPlayer?.command({ cmd: "volume", value: volume });
+  }
+
+  async #startSend(): Promise<void> {
+    await this.stop("laptopToPc");
+    // Never loop the virtual cable back to the gaming PC: it carries the mic,
+    // so this would send your own voice back into your ears.
+    const d = await HelperProcess.list(this.#exe);
+    const def = d.playback.find((x) => x.isDefault);
+    if (def && VB_PLAYBACK.test(def.name)) {
+      throw new EngineError({
+        code: "device-missing",
+        message: "The laptop's default playback device is the virtual cable.",
+        hint: "In Windows Sound settings on the laptop, set Output back to your speakers or headphones.",
+      });
+    }
     const s = HelperProcess.spawn(this.#exe, ["send", "--connect", `127.0.0.1:${AUDIO_TUNNEL_PORT}`]);
     this.#sender = s;
     const started = await waitEvent(s, "streaming", START_TIMEOUT_MS).catch(async (e) => {
-      await this.stop();
+      await this.stop("laptopToPc");
       throw e;
     });
     const f = started.format as AudioFormat;
@@ -198,13 +313,40 @@ export class LaptopAudioSender {
     });
   }
 
-  async stop(): Promise<void> {
-    const s = this.#sender;
-    this.#sender = null;
-    if (!s || !s.running) return;
-    s.stop();
-    const timer = setTimeout(() => s.child.kill(), 2_000);
-    await s.exited;
-    clearTimeout(timer);
+  async #startMic(volume: number): Promise<void> {
+    await this.stop("micToLaptop");
+    const ep = await this.endpoint();
+    if (!ep.present || !ep.playbackId) {
+      throw new EngineError({ code: "endpoint-missing", message: "VB-CABLE is not installed on the laptop.", hint: "Install it, reboot, and restart the agent." });
+    }
+    const p = HelperProcess.spawn(this.#exe, ["play", "--connect", `127.0.0.1:${MIC_TUNNEL_PORT}`, "--device", ep.playbackId, "--volume", String(volume)]);
+    this.#micPlayer = p;
+    let live = false;
+    p.on("format", (e) => {
+      const from = e.format as AudioFormat;
+      this.#emit({ op: "audio.status", route: "micToLaptop", conversion: e.conversion ? { from, to: e.device as AudioFormat } : null });
+    });
+    p.on("stats", (e) =>
+      this.#emit({
+        op: "audio.status",
+        route: "micToLaptop",
+        stats: { bufferMs: Number(e.bufferMs), underruns: Number(e.underruns), droppedFrames: Number(e.droppedFrames) },
+      }),
+    );
+    const fail = (error: AgentError) => {
+      if (live && this.#micPlayer === p) {
+        live = false;
+        this.#emit({ op: "audio.status", route: "micToLaptop", error });
+      }
+    };
+    p.on("error", (e) => fail(e.code === "device-missing" ? { code: "device-missing", message: "The virtual cable on the laptop is not available." } : errorFrom(e)));
+    void p.exited.then(() => fail({ code: "engine-crashed", message: "The microphone player on the laptop stopped" }));
+
+    await waitEvent(p, "streaming", START_TIMEOUT_MS).catch(async (e) => {
+      await this.stop("micToLaptop");
+      throw e;
+    });
+    live = true;
+    this.#log("info", `Playing the gaming PC microphone into CABLE Input; apps record it from ${ep.name ?? "CABLE Output"}`);
   }
 }

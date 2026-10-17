@@ -3,10 +3,11 @@
 One keyboard, mouse and IEM on the gaming PC; choose whether they work on the gaming PC or on a laptop
 over the local network, and route audio both ways. Spec: [`docs/spec.md`](docs/spec.md).
 
-**Status: Phase 2 (laptop audio → gaming PC), awaiting two-machine tests.** Pairing, the encrypted
-link between the two agents, Deskflow-based input switching, and laptop audio to the gaming PC are
-built and tested on one machine. The microphone route is Phase 3. On your two machines follow
-[`docs/phase1-testing.md`](docs/phase1-testing.md), then [`docs/phase2-testing.md`](docs/phase2-testing.md).
+**Status: Phase 3 (both audio directions), awaiting two-machine tests.** Pairing, the encrypted
+link between the two agents, Deskflow-based input switching, laptop audio to the gaming PC, and the
+gaming PC microphone to a selectable laptop microphone (via VB-CABLE) are built and tested on one
+machine. On your two machines follow [`docs/phase1-testing.md`](docs/phase1-testing.md),
+[`docs/phase2-testing.md`](docs/phase2-testing.md), then [`docs/phase3-testing.md`](docs/phase3-testing.md).
 Background: [`docs/feasibility-report.md`](docs/feasibility-report.md).
 
 ## Layout

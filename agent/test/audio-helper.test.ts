@@ -119,3 +119,54 @@ test("refuses non-loopback addresses", { skip }, async () => {
   assert.match(String(err.message), /loopback/);
   await h.exited;
 });
+
+test("reverse direction: sender listens, player dials (the mic route's shape)", { skip }, async () => {
+  const p = port++;
+  const wav = join(dir, "reverse.wav");
+  const send = HelperProcess.spawn(exe, ["send", "--listen", `127.0.0.1:${p}`, "--tone", "500"]);
+  await waitFor(send, "listening");
+  const play = HelperProcess.spawn(exe, ["play", "--connect", `127.0.0.1:${p}`, "--wav", wav, "--seconds", "0.5"]);
+  await waitFor(play, "wav", 6000);
+  send.stop();
+  await Promise.all([play.exited, send.exited]);
+  const { samples } = readWavF32(wav);
+  const peak = samples.reduce((m, x) => Math.max(m, Math.abs(x)), 0);
+  assert.ok(Math.abs(20 * Math.log10(peak) + 12) < 0.05);
+});
+
+test("mute is applied at the sender: nothing audible leaves the machine", { skip }, async () => {
+  const p = port++;
+  const wav = join(dir, "muted.wav");
+  const send = HelperProcess.spawn(exe, ["send", "--listen", `127.0.0.1:${p}`, "--tone", "500", "--muted"]);
+  await waitFor(send, "listening");
+  const play = HelperProcess.spawn(exe, ["play", "--connect", `127.0.0.1:${p}`, "--wav", wav, "--seconds", "0.5"]);
+  await waitFor(play, "wav", 6000);
+  send.stop();
+  await Promise.all([play.exited, send.exited]);
+  const { samples } = readWavF32(wav);
+  assert.ok(samples.every((x) => x === 0));
+});
+
+test("captures from a recording device (the virtual cable, so no room audio is recorded)", { skip }, async (t) => {
+  const devices = await HelperProcess.list(exe);
+  const cable = devices.capture.find((d) => /CABLE Output/i.test(d.name));
+  if (!cable) return t.skip("VB-CABLE not installed");
+  const p = port++;
+  const wav = join(dir, "capture.wav");
+  const send = HelperProcess.spawn(exe, ["send", "--listen", `127.0.0.1:${p}`, "--capture", cable.id]);
+  await waitFor(send, "listening");
+  const play = HelperProcess.spawn(exe, ["play", "--connect", `127.0.0.1:${p}`, "--wav", wav, "--seconds", "0.5"]);
+  const started = await waitFor(send, "streaming");
+  assert.equal(started.source, "capture");
+  const done = await waitFor(play, "wav", 6000);
+  send.stop();
+  await Promise.all([play.exited, send.exited]);
+  assert.ok((done.frames as number) > 0);
+});
+
+test("player gives up when no sender appears", { skip }, async () => {
+  const play = HelperProcess.spawn(exe, ["play", "--connect", `127.0.0.1:${port++}`, "--wav", join(dir, "none.wav")]);
+  const err = await waitFor(play, "error", 15_000);
+  assert.equal(err.code, "peer-unreachable");
+  await play.exited;
+});

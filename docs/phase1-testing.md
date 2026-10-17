@@ -67,7 +67,7 @@ Please note anything that differs, especially items 3 and 5. The open questions 
 - Clipboard sharing is off.
 - The paired key is stored in `%LOCALAPPDATA%\LanKvmSwitcher\peer.json`, protected by your user
   profile's permissions, not yet by DPAPI.
-- Audio is Phase 2.
+- Audio: see `docs/phase2-testing.md` and `docs/phase3-testing.md`.
 - While Laptop mode is active, another program on either machine could connect to Deskflow's loopback
   port and receive keystrokes (see ADR 0003, "Known gap"). Don't use Laptop mode on a machine shared
   with other Windows users until that is fixed.

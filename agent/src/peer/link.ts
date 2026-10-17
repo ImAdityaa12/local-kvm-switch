@@ -11,7 +11,7 @@
 
 import net from "node:net";
 import tls from "node:tls";
-import type { AgentError, InputEngineStatus, Machine } from "../../../lib/protocol/index.ts";
+import type { AgentError, AudioFormat, InputEngineStatus, Machine, RouteId } from "../../../lib/protocol/index.ts";
 import { EngineError } from "../engines.ts";
 import { makeRateLimiter } from "../rate-limit.ts";
 import { frameChannel, type FrameChannel } from "./frames.ts";
@@ -28,9 +28,22 @@ const RECONNECT_MAX_MS = 10_000;
 export type PeerRequest =
   | { op: "input.prepare" }
   | { op: "input.release" }
-  | { op: "audio.start"; route: "laptopToPc" }
-  | { op: "audio.stop"; route: "laptopToPc" };
-export type PeerEvent = { op: "input.status"; engine: InputEngineStatus; connected: boolean; entered: boolean };
+  | { op: "audio.start"; route: RouteId; volume?: number }
+  | { op: "audio.stop"; route: RouteId }
+  | { op: "audio.volume"; route: "micToLaptop"; volume: number };
+
+export type PeerEvent =
+  | { op: "input.status"; engine: InputEngineStatus; connected: boolean; entered: boolean }
+  /** Laptop → gaming PC: the virtual microphone the laptop can feed. */
+  | { op: "audio.endpoint"; present: boolean; name: string | null; isDefault: boolean | null }
+  /** Laptop → gaming PC: health of the mic player on the laptop. */
+  | {
+      op: "audio.status";
+      route: "micToLaptop";
+      conversion?: { from: AudioFormat; to: AudioFormat } | null;
+      stats?: { bufferMs: number; underruns: number; droppedFrames: number };
+      error?: AgentError;
+    };
 
 export interface LinkOptions {
   machine: Machine;
@@ -61,12 +74,55 @@ function parseRequest(m: Record<string, unknown>): PeerRequest | null {
   const body = m.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") return null;
   if (body.op === "input.prepare" || body.op === "input.release") return { op: body.op };
-  if ((body.op === "audio.start" || body.op === "audio.stop") && body.route === "laptopToPc") return { op: body.op, route: body.route };
+  const route = body.route === "laptopToPc" || body.route === "micToLaptop" ? body.route : null;
+  const volume = typeof body.volume === "number" && body.volume >= 0 && body.volume <= 1 ? body.volume : undefined;
+  if (body.op === "audio.start" && route) return { op: "audio.start", route, volume };
+  if (body.op === "audio.stop" && route) return { op: "audio.stop", route };
+  if (body.op === "audio.volume" && route === "micToLaptop" && volume !== undefined) return { op: "audio.volume", route, volume };
   return null;
+}
+
+function isFormat(v: unknown): v is AudioFormat {
+  const f = v as AudioFormat | null;
+  return (
+    !!f &&
+    typeof f.sampleRate === "number" &&
+    typeof f.channels === "number" &&
+    typeof f.bitDepth === "number" &&
+    ["f32", "s16", "s24", "s32"].includes(f.sample as string)
+  );
+}
+
+function shortText(v: unknown, max: number): string | null {
+  return typeof v === "string" ? v.slice(0, max) : null;
 }
 
 function parseEvent(m: Record<string, unknown>): PeerEvent | null {
   const b = m.body as Record<string, unknown> | undefined;
+  if (b?.op === "audio.endpoint") {
+    if (typeof b.present !== "boolean") return null;
+    return {
+      op: "audio.endpoint",
+      present: b.present,
+      name: shortText(b.name, 120),
+      isDefault: typeof b.isDefault === "boolean" ? b.isDefault : null,
+    };
+  }
+  if (b?.op === "audio.status" && b.route === "micToLaptop") {
+    const evt: PeerEvent & { op: "audio.status" } = { op: "audio.status", route: "micToLaptop" };
+    const c = b.conversion as { from?: unknown; to?: unknown } | null | undefined;
+    if (c === null) evt.conversion = null;
+    else if (c && isFormat(c.from) && isFormat(c.to)) evt.conversion = { from: c.from, to: c.to };
+    const st = b.stats as Record<string, unknown> | undefined;
+    if (st && typeof st.bufferMs === "number" && typeof st.underruns === "number" && typeof st.droppedFrames === "number") {
+      evt.stats = { bufferMs: st.bufferMs, underruns: st.underruns, droppedFrames: st.droppedFrames };
+    }
+    const e = b.error as Record<string, unknown> | undefined;
+    if (e && typeof e.message === "string") {
+      evt.error = { code: e.code === "device-missing" ? "device-missing" : "internal", message: e.message.slice(0, 200), hint: shortText(e.hint, 300) ?? undefined };
+    }
+    return evt;
+  }
   if (!b || b.op !== "input.status") return null;
   const engines: InputEngineStatus[] = ["stopped", "starting", "running", "stopping", "error"];
   if (!engines.includes(b.engine as InputEngineStatus) || typeof b.connected !== "boolean" || typeof b.entered !== "boolean") return null;

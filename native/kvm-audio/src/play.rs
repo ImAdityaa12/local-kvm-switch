@@ -6,7 +6,7 @@ use crate::io::{emit, emit_error, Control};
 use crate::jitter::Jitter;
 use crate::wire::{self, Format};
 use std::io::{BufReader, Write};
-use std::net::{SocketAddr, TcpListener};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -27,63 +27,102 @@ struct Shared {
     jitter: Mutex<Option<Jitter>>,
 }
 
-/// Accepts the laptop's sender (and later reconnects) and feeds the buffer.
-fn network(listener: TcpListener, shared: Arc<Shared>, fmt_tx: mpsc::Sender<Format>, ctl: Arc<Control>) {
-    let mut format: Option<Format> = None;
-    for conn in listener.incoming() {
+pub enum Link {
+    Listen(SocketAddr),
+    /// Dial the sender (used when the sender is on the far side of the tunnel); give up after 10 s.
+    Connect(SocketAddr),
+}
+
+/// Reads one sender's stream into the buffer. Returns false when the helper should stop.
+fn serve(stream: TcpStream, shared: &Shared, fmt_tx: &mpsc::Sender<Format>, format: &mut Option<Format>, ctl: &Control) -> bool {
+    let _ = stream.set_nodelay(true);
+    let mut r = BufReader::with_capacity(64 * 1024, stream);
+    let f = match wire::read_header(&mut r) {
+        Ok(f) => f,
+        Err(e) => {
+            emit_error("bad-request", format!("rejected a stream: {e}"));
+            return true;
+        }
+    };
+    match *format {
+        None => {
+            *format = Some(f);
+            let _ = fmt_tx.send(f);
+        }
+        Some(old) if !old.same_audio(&f) => {
+            // The device stream is set up for the old format; let the agent restart us.
+            emit_error("format-unsupported", "the sender changed its audio format");
+            ctl.request_stop();
+            return false;
+        }
+        Some(_) => {}
+    }
+    emit(serde_json::json!({ "event": "connected" }));
+    let mut buf = Vec::new();
+    while wire::read_frame(&mut r, f.block_align(), &mut buf).is_ok() {
+        if let Some(j) = shared.jitter.lock().unwrap().as_mut() {
+            j.push(&buf);
+        }
         if ctl.stopping() {
-            return;
+            return false;
         }
-        let Ok(stream) = conn else { continue };
-        let _ = stream.set_nodelay(true);
-        let mut r = BufReader::with_capacity(64 * 1024, stream);
-        let f = match wire::read_header(&mut r) {
-            Ok(f) => f,
-            Err(e) => {
-                emit_error("bad-request", format!("rejected a stream: {e}"));
-                continue;
+    }
+    emit(serde_json::json!({ "event": "disconnected" }));
+    true
+}
+
+fn network(link: Link, shared: Arc<Shared>, fmt_tx: mpsc::Sender<Format>, ctl: Arc<Control>) {
+    let mut format: Option<Format> = None;
+    match link {
+        Link::Listen(addr) => {
+            let listener = match TcpListener::bind(addr) {
+                Ok(l) => l,
+                Err(e) => {
+                    emit_error("internal", format!("could not listen: {e}"));
+                    ctl.request_stop();
+                    return;
+                }
+            };
+            emit(serde_json::json!({ "event": "listening", "port": listener.local_addr().map(|a| a.port()).unwrap_or(0) }));
+            for conn in listener.incoming() {
+                if ctl.stopping() {
+                    return;
+                }
+                let Ok(stream) = conn else { continue };
+                if !serve(stream, &shared, &fmt_tx, &mut format, &ctl) {
+                    return;
+                }
             }
-        };
-        match format {
-            None => {
-                format = Some(f);
-                let _ = fmt_tx.send(f);
-            }
-            Some(old) if !old.same_audio(&f) => {
-                // The device stream is set up for the old format; let the agent restart us.
-                emit_error("format-unsupported", "the laptop changed its audio format");
-                ctl.request_stop();
-                return;
-            }
-            Some(_) => {}
         }
-        emit(serde_json::json!({ "event": "connected" }));
-        let mut buf = Vec::new();
-        loop {
-            match wire::read_frame(&mut r, f.block_align(), &mut buf) {
-                Ok(_) => {
-                    if let Some(j) = shared.jitter.lock().unwrap().as_mut() {
-                        j.push(&buf);
+        Link::Connect(addr) => {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let stream = loop {
+                if ctl.stopping() {
+                    return;
+                }
+                match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+                    Ok(s) => break s,
+                    Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(200)),
+                    Err(e) => {
+                        emit_error("peer-unreachable", format!("could not reach the sender: {e}"));
+                        ctl.request_stop();
+                        return;
                     }
                 }
-                Err(_) => break,
-            }
-            if ctl.stopping() {
-                return;
-            }
+            };
+            serve(stream, &shared, &fmt_tx, &mut format, &ctl);
+            // One stream only in this mode; the agent restarts us if needed.
+            ctl.request_stop();
         }
-        emit(serde_json::json!({ "event": "disconnected" }));
     }
 }
 
-pub fn run(addr: SocketAddr, sink: Sink, ctl: Arc<Control>) -> Res<()> {
-    let listener = TcpListener::bind(addr)?;
-    emit(serde_json::json!({ "event": "listening", "port": listener.local_addr()?.port() }));
+pub fn run(link: Link, sink: Sink, ctl: Arc<Control>) -> Res<()> {
     let shared = Arc::new(Shared { jitter: Mutex::new(None) });
     let (fmt_tx, fmt_rx) = mpsc::channel();
     {
         let (s, c) = (Arc::clone(&shared), Arc::clone(&ctl));
-        std::thread::spawn(move || network(listener, s, fmt_tx, c));
+        std::thread::spawn(move || network(link, s, fmt_tx, c));
     }
 
     // Wait for the first stream to learn its format.
