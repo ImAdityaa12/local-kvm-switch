@@ -143,3 +143,15 @@ test("return to gaming PC cancels a switch that is still waiting", async () => {
   assert.equal(store.state.input.pending, null);
   audio.dispose();
 });
+
+test("a waiting audio route retries as soon as the laptop is back", async () => {
+  const { world, store, controller, audio } = await setup();
+  await controller.handle({ type: "audio.setEnabled", route: "laptopToPc", enabled: true });
+  world.setPeerReachable(false);
+  assert.equal(store.state.audio.laptopToPc.status, "reconnecting");
+  // Timers are held by the test harness and never run here, so only the link event can restart it.
+  world.setPeerReachable(true);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(store.state.audio.laptopToPc.status, "streaming");
+  audio.dispose();
+});

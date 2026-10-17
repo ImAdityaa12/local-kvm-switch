@@ -102,6 +102,13 @@ export class Controller {
     });
 
     deps.audio.onFault((route, error) => this.#onRouteFault(route, error));
+
+    deps.audio.onStats?.((route, info) => {
+      this.#d.store.update((s) => {
+        if (info.stats !== undefined) s.audio[route].stats = info.stats;
+        if (info.conversion !== undefined) s.audio[route].conversion = info.conversion;
+      });
+    });
   }
 
   async handle(cmd: Command): Promise<void> {
@@ -249,7 +256,16 @@ export class Controller {
       if (online) s.peer.lastSeenAt = this.#now();
     });
     const who = store.state.peer.name ?? (store.state.agent.machine === "gaming-pc" ? "Laptop" : "Gaming PC");
-    if (online && prev !== "online") store.log("info", `${who} is reachable`);
+    if (online && prev !== "online") {
+      store.log("info", `${who} is reachable`);
+      // Do not wait out the backoff: retry waiting routes now.
+      for (const route of ["laptopToPc", "micToLaptop"] as const) {
+        const r = store.state.audio[route];
+        if (r.enabled && r.status === "reconnecting") {
+          this.#startRoute(route, r.retry?.attempt ?? 1).catch(() => {});
+        }
+      }
+    }
     if (!online && prev === "online") {
       store.log("warn", `${who} disconnected${error ? `: ${error.message}` : ""}`);
       if (store.state.input.target === "laptop" || store.state.input.pending?.target === "laptop") {
@@ -322,6 +338,8 @@ export class Controller {
       d.audio[route].status = "off";
       d.audio[route].levelDb = null;
       d.audio[route].retry = null;
+      d.audio[route].stats = null;
+      d.audio[route].conversion = null;
       d.audio[route].error = undefined;
     });
     store.log("info", `${ROUTE_LABEL[route]} stopped (${reason.toLowerCase()})`);

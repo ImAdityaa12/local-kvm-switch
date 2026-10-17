@@ -63,4 +63,11 @@ export interface AudioEngine {
   onLevel(cb: (route: RouteId, levelDb: number) => void): void;
   /** A running stream failed (peer gone, device removed). */
   onFault(cb: (route: RouteId, error: AgentError) => void): void;
+  /** Receiver health and whether Windows converts the format. */
+  onStats?(cb: (route: RouteId, info: RouteInfo) => void): void;
+}
+
+export interface RouteInfo {
+  stats?: { bufferMs: number; underruns: number; droppedFrames: number };
+  conversion?: { from: AudioFormat; to: AudioFormat } | null;
 }

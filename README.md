@@ -3,9 +3,10 @@
 One keyboard, mouse and IEM on the gaming PC; choose whether they work on the gaming PC or on a laptop
 over the local network, and route audio both ways. Spec: [`docs/spec.md`](docs/spec.md).
 
-**Status: Phase 1 (input), awaiting two-machine tests.** Pairing, the encrypted link between the
-two agents, and Deskflow-based input switching are built and tested on one machine. Audio is Phase 2.
-To try it on your gaming PC and laptop, follow [`docs/phase1-testing.md`](docs/phase1-testing.md).
+**Status: Phase 2 (laptop audio → gaming PC), awaiting two-machine tests.** Pairing, the encrypted
+link between the two agents, Deskflow-based input switching, and laptop audio to the gaming PC are
+built and tested on one machine. The microphone route is Phase 3. On your two machines follow
+[`docs/phase1-testing.md`](docs/phase1-testing.md), then [`docs/phase2-testing.md`](docs/phase2-testing.md).
 Background: [`docs/feasibility-report.md`](docs/feasibility-report.md).
 
 ## Layout
@@ -20,6 +21,8 @@ Background: [`docs/feasibility-report.md`](docs/feasibility-report.md).
 | `agent/src/peer/` | Pairing (numeric comparison), TLS-PSK peer link, tunnels, trust store. |
 | `agent/src/deskflow/` | Deskflow settings, process supervision, server and client engines. |
 | `agent/notify.mjs` | Run by Deskflow on enter/leave; tells the agent where the cursor is. |
+| `agent/src/audio/` | Drives the native audio helper: player on the gaming PC, sender on the laptop. |
+| `native/kvm-audio/` | Native audio helper (Rust, WASAPI): loopback capture, jitter buffer, playback. |
 | `agent/src/sim/` | Simulated engines for development. |
 | `docs/` | Feasibility report, ADRs, spec. |
 
@@ -49,10 +52,14 @@ paired laptop to try pairing), `--no-endpoint` (laptop without a virtual microph
 The yellow bar in simulated mode can drop the laptop or remove its virtual microphone, so the failure
 paths (return to Gaming PC, audio reconnect with backoff, missing endpoint) can be tried without hardware.
 
+Audio needs the native helper on both machines: `npm run build:audio` (Rust required; see
+[`docs/phase2-testing.md`](docs/phase2-testing.md)).
+
 ## Check it
 
 ```bash
-npm test              # agent and protocol tests (node:test)
+npm test              # agent, protocol and audio-helper tests (node:test)
+npm run test:audio    # Rust unit tests for the helper
 npm run typecheck
 npm run lint
 ```

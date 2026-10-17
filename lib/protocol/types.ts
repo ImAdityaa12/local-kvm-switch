@@ -108,6 +108,10 @@ export interface RouteState {
   muted: boolean;
   /** Peak level in dBFS from the last metering window, when streaming. */
   levelDb: number | null;
+  /** Set when Windows converts the stream to the device format; null when samples pass untouched. */
+  conversion?: { from: AudioFormat; to: AudioFormat } | null;
+  /** Receiver health while streaming. */
+  stats?: { bufferMs: number; underruns: number; droppedFrames: number } | null;
   error?: AgentError;
   retry?: { attempt: number; nextAt: number } | null;
 }
@@ -124,6 +128,8 @@ export interface AudioDevice {
   id: string;
   name: string;
   isDefault: boolean;
+  /** The device's shared-mode mix format, when known. */
+  mix?: AudioFormat | null;
 }
 
 export interface AgentEvent {

@@ -9,7 +9,9 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "node --test --test-timeout=20000 \"agent/test/*.test.ts\"",
-    "agent:sim": "node agent/src/main.ts --simulate"
+    "agent:sim": "node agent/src/main.ts --simulate",
+    "build:audio": "node scripts/build-audio.mjs",
+    "test:audio": "node scripts/build-audio.mjs --test"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

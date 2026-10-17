@@ -7,7 +7,7 @@
 // Audio is not built yet (Phase 2); real mode reports it as unavailable.
 
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,9 @@ import { EngineError, type AudioEngine, type InputEngine, type InputReport } fro
 import { DESKFLOW_SERVER_PORT, DESKFLOW_TUNNEL_PORT } from "./deskflow/config.ts";
 import { DeskflowClient, DeskflowServerInput, type CursorEvent, type DeskflowPaths } from "./deskflow/engines.ts";
 import { NullAudio } from "./null-audio.ts";
-import { LINK_PORT, PeerLink } from "./peer/link.ts";
+import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudioSender } from "./audio/engine.ts";
+import { helperPath } from "./audio/helper.ts";
+import { LINK_PORT, PeerLink, type PeerRequest } from "./peer/link.ts";
 import { PairingManager } from "./peer/manager.ts";
 import { TrustStore } from "./peer/trust.ts";
 import { CONTROL_PATH, startControlServer } from "./server.ts";
@@ -35,6 +37,7 @@ const { values } = parseArgs({
     machine: { type: "string", default: "gaming-pc" },
     bind: { type: "string" },
     deskflow: { type: "string", default: DEFAULT_DESKFLOW },
+    "audio-helper": { type: "string" },
     port: { type: "string", default: "47820" },
     dashboard: { type: "string", default: "http://localhost:3000" },
     origin: { type: "string", multiple: true, default: [] },
@@ -142,8 +145,16 @@ function deskflowPaths(): DeskflowPaths {
 async function buildReal(): Promise<Built> {
   const trust = new TrustStore(dir);
   const trusted = trust.load();
-  const audio: AudioEngine = new NullAudio();
   const events = linkEvents();
+  const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+  const helperExe = values["audio-helper"] ?? helperPath(repoRoot);
+  const haveHelper = existsSync(helperExe);
+  // Assigned below; the audio engine only calls it after the link exists.
+  let requestPeer: (r: PeerRequest) => Promise<void> = () => Promise.reject(new EngineError({ code: "peer-unreachable", message: "No link yet" }));
+  // Only the gaming PC owns audio routes; the laptop sends when asked.
+  const audio: AudioEngine =
+    machine === "gaming-pc" && haveHelper ? new HelperAudio(helperExe, { request: (r) => requestPeer(r) }) : new NullAudio();
+  const devices = await audio.listDevices().catch(() => ({ playback: [], capture: [] }));
   const lanAddress = machine === "gaming-pc" ? (values.bind ?? privateIPv4()) : null;
   if (machine === "gaming-pc") {
     if (!lanAddress || !isLanAddress(lanAddress)) die("No private network address found. Pass --bind with this PC's LAN address.");
@@ -153,10 +164,15 @@ async function buildReal(): Promise<Built> {
     agent: { name, machine, version: VERSION, protocol: PROTOCOL_VERSION, simulated: false, engines: { input: "deskflow", audio: audio.kind }, lanAddress },
     peer: trusted ? { link: "offline", name: trusted.name, address: trusted.address ?? undefined, pairing: null } : { link: "unpaired", pairing: null },
     input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false },
-    audio: { laptopToPc: idleRoute(), micToLaptop: { ...idleRoute(), virtualEndpoint: await audio.virtualEndpoint() } },
-    devices: { playback: [], capture: [] },
+    audio: {
+      laptopToPc: { ...idleRoute(), volume: 0.8, deviceId: devices.playback.find((d) => d.isDefault)?.id ?? null },
+      micToLaptop: { ...idleRoute(), deviceId: devices.capture.find((d) => d.isDefault)?.id ?? null, virtualEndpoint: await audio.virtualEndpoint() },
+    },
+    devices,
     events: [],
   });
+  const sender = machine === "laptop" && haveHelper ? new LaptopAudioSender(helperExe, (l, m) => store.log(l, m)) : null;
+  if (!haveHelper) store.log("warn", "The audio helper is not built, so audio routing is unavailable. Run npm run build:audio.");
 
   const paths = deskflowPaths();
   let input: InputEngine;
@@ -193,8 +209,14 @@ async function buildReal(): Promise<Built> {
     trust: () => trust.load(),
     bind: lanAddress ?? undefined,
     port: LINK_PORT,
-    tunnelTargets: machine === "gaming-pc" ? { deskflow: DESKFLOW_SERVER_PORT } : undefined,
-    tunnelListeners: machine === "laptop" ? [{ name: "deskflow", localPort: DESKFLOW_TUNNEL_PORT }] : undefined,
+    tunnelTargets: machine === "gaming-pc" ? { deskflow: DESKFLOW_SERVER_PORT, audio: AUDIO_PLAY_PORT } : undefined,
+    tunnelListeners:
+      machine === "laptop"
+        ? [
+            { name: "deskflow", localPort: DESKFLOW_TUNNEL_PORT },
+            { name: "audio", localPort: AUDIO_TUNNEL_PORT },
+          ]
+        : undefined,
     onLink: (online, info) => {
       if (online) {
         store.update((s) => {
@@ -205,9 +227,13 @@ async function buildReal(): Promise<Built> {
       events.fire(online, info.error);
     },
     onRequest: async (req) => {
-      if (!client) throw new EngineError({ code: "not-supported", message: "Only the laptop runs the input client." });
-      if (req.op === "input.prepare") await client.start();
-      else await client.stop();
+      if (machine !== "laptop") throw new EngineError({ code: "not-supported", message: "Only the laptop takes these requests." });
+      if (req.op === "audio.start" || req.op === "audio.stop") {
+        if (!sender) throw new EngineError({ code: "engine-missing", message: "The audio helper is not built on the laptop.", hint: "Run npm run build:audio on the laptop." });
+        return req.op === "audio.start" ? sender.start() : sender.stop();
+      }
+      if (req.op === "input.prepare") await client!.start();
+      else await client!.stop();
     },
     onHeard: () => {
       const last = store.state.peer.lastSeenAt ?? 0;
@@ -240,14 +266,37 @@ async function buildReal(): Promise<Built> {
     },
   };
 
+  requestPeer = (r) => link.request(r);
+
   const controller = new Controller({ store, input, audio, peer: events, pairing });
   try {
     await link.start();
   } catch (e) {
     die(`Could not open the peer link on port ${LINK_PORT}: ${(e as Error).message}`);
   }
-  store.log("info", `Agent started as the ${machine === "gaming-pc" ? "gaming PC" : "laptop"}. Audio routing is not built yet.`);
-  return { store, controller, dispose: () => link.stop() };
+
+  // Devices come and go (USB DACs, HDMI); keep the list current without ever
+  // changing the selected device on our own.
+  const refresh = setInterval(async () => {
+    if (machine !== "gaming-pc" || !haveHelper) return;
+    const next = await audio.listDevices().catch(() => null);
+    if (next && JSON.stringify(next) !== JSON.stringify(store.state.devices)) {
+      store.update((s) => {
+        s.devices = next;
+      });
+    }
+  }, 15_000);
+
+  store.log("info", `Agent started as the ${machine === "gaming-pc" ? "gaming PC" : "laptop"}. The microphone route arrives in Phase 3.`);
+  return {
+    store,
+    controller,
+    dispose: async () => {
+      clearInterval(refresh);
+      await sender?.stop();
+      await link.stop();
+    },
+  };
 }
 
 const built = values.simulate ? await buildSimulated() : await buildReal();

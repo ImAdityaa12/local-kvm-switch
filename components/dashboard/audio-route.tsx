@@ -45,20 +45,31 @@ export function AudioSection({ state, send, now }: { state: AgentState; send: Se
           send={send}
           now={now}
         />
-        <Route
-          id="micToLaptop"
-          index={2}
-          title="Gaming PC microphone to Laptop"
-          summary="Sends your IEM microphone to the laptop as a selectable microphone."
-          route={state.audio.micToLaptop}
-          devices={state.devices.capture}
-          deviceLabel="Microphone on this PC"
-          levelLabel="Microphone gain"
-          simulated={state.agent.simulated}
-          send={send}
-          now={now}
-          endpoint={state.audio.micToLaptop.virtualEndpoint}
-        />
+        {state.agent.simulated ? (
+          <Route
+            id="micToLaptop"
+            index={2}
+            title="Gaming PC microphone to Laptop"
+            summary="Sends your IEM microphone to the laptop as a selectable microphone."
+            route={state.audio.micToLaptop}
+            devices={state.devices.capture}
+            deviceLabel="Microphone on this PC"
+            levelLabel="Microphone gain"
+            simulated={state.agent.simulated}
+            send={send}
+            now={now}
+            endpoint={state.audio.micToLaptop.virtualEndpoint}
+          />
+        ) : (
+          <article aria-labelledby="mic-later" className="rise flex flex-col justify-between gap-8 bg-surface-1 p-6 sm:p-8" style={{ "--i": 2 } as React.CSSProperties}>
+            <h3 id="mic-later" className="text-2xl leading-tight font-semibold tracking-[-0.02em]">
+              Gaming PC microphone to Laptop
+            </h3>
+            <p className="max-w-[48ch] text-lg text-ink-2">
+              Next phase. The laptop needs a virtual microphone (VB-CABLE, which you install yourself) before Discord can pick up your IEM mic.
+            </p>
+          </article>
+        )}
       </div>
     </section>
   );
@@ -133,6 +144,12 @@ function Route({
       </p>
 
       <Meter levelDb={route.status === "streaming" ? route.levelDb : null} muted={route.muted} simulated={simulated} label={`${title} level`} />
+      {route.status === "streaming" && route.stats ? (
+        <p className="mt-2 text-sm text-ink-2">
+          Buffer {route.stats.bufferMs} ms, {route.stats.underruns === 0 ? "no dropouts" : `${route.stats.underruns} dropout${route.stats.underruns === 1 ? "" : "s"}`}
+          {route.stats.droppedFrames > 0 ? `, ${route.stats.droppedFrames} frames skipped to keep up` : ""}
+        </p>
+      ) : null}
 
       {route.error && route.status !== "streaming" ? <ErrorNote error={route.error} className="mt-4" /> : null}
 
@@ -188,7 +205,18 @@ function Route({
       </div>
 
       <dl className="mt-auto grid gap-5 pt-8 sm:grid-cols-2">
-        <Fact term="Format">{format ?? "Known once streaming"}</Fact>
+        <Fact term="Format">
+          {format ?? "Known once streaming"}
+          {format ? (
+            route.conversion ? (
+              <span className="mt-1 block font-normal text-warn">
+                Windows converts it to {formatAudio(route.conversion.to)} for this device.
+              </span>
+            ) : (
+              <span className="mt-1 block font-normal text-ink-2">No format conversion{volume < 1 && !route.muted ? "; volume below 100% scales the samples" : ""}.</span>
+            )
+          ) : null}
+        </Fact>
         {endpoint ? (
           <Fact term="Laptop microphone endpoint">
             {endpoint.present ? (

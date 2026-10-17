@@ -162,6 +162,10 @@ Built and tested on one machine (two agents over loopback), not yet on two machi
 
 Two-machine test guide: `docs/phase1-testing.md`.
 
+Phase 2 (laptop audio → gaming PC) is built on the same link; see ADR 0002 and
+`docs/phase2-testing.md`. Rust was installed per user (GNU toolchain) with WinLibs binutils for the
+`windows` crate's import libraries.
+
 ## 9. Original smallest next step
 
 Install Deskflow v1.27.0 on both machines (GPL-2.0; installs a service by default, or use the portable

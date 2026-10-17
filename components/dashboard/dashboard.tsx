@@ -102,7 +102,7 @@ function Connected({
       ) : null}
 
       {state.agent.machine === "laptop" ? <LaptopInput state={state} /> : <TargetSwitch state={state} send={send} />}
-      {state.agent.engines.audio === "none" ? <AudioLater /> : <AudioSection state={state} send={send} now={now} />}
+      {state.agent.machine === "laptop" ? <LaptopAudio /> : state.agent.engines.audio === "none" ? <AudioLater /> : <AudioSection state={state} send={send} now={now} />}
 
       <div className="mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         <PeerPanel state={state} send={send} now={now} />
@@ -154,14 +154,27 @@ function LaptopInput({ state }: { state: AgentState }) {
   );
 }
 
+function LaptopAudio() {
+  return (
+    <section aria-labelledby="audio-heading" className="rise mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" style={{ "--i": 2 } as React.CSSProperties}>
+      <h2 id="audio-heading" className="text-title leading-tight font-semibold tracking-[-0.03em]">
+        Sound goes to the gaming PC
+      </h2>
+      <p className="max-w-[60ch] text-lg text-ink-2">
+        When the gaming PC turns on its laptop audio route, this laptop sends everything it plays, unchanged, at its own mix format. The route is controlled from the gaming PC&apos;s dashboard.
+      </p>
+    </section>
+  );
+}
+
 function AudioLater() {
   return (
     <section aria-labelledby="audio-heading" className="rise mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" style={{ "--i": 2 } as React.CSSProperties}>
       <h2 id="audio-heading" className="text-title leading-tight font-semibold tracking-[-0.03em]">
-        Audio comes next
+        Audio is unavailable
       </h2>
       <p className="max-w-[60ch] text-lg text-ink-2">
-        Laptop sound to your IEM and the IEM microphone to the laptop need a native audio helper, which is Phase 2. Nothing is routed today, so nothing here claims otherwise.
+        The native audio helper is not built on this PC, so no audio is routed. Build it with <code>npm run build:audio</code> and restart the agent.
       </p>
     </section>
   );

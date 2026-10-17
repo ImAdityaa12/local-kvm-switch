@@ -24,6 +24,26 @@ system-wide capture endpoint; new kernel drivers need Microsoft signing.
   from pairing (ADR 0003). Opus only as an explicit low-bandwidth option.
 - Unsupported formats fail loudly with `format-unsupported`; no silent conversion.
 
+## Phase 2 implementation (2026-10-17)
+
+- Helper: `native/kvm-audio`, Rust with `wasapi` 0.26 (MIT) and `serde_json`. Built with the GNU
+  toolchain plus WinLibs binutils on the dev machine; MSVC works too. Driven by the agent over
+  stdin/stdout JSON; it only binds or connects to loopback addresses.
+- **Transport changed from UDP to TCP inside the peer link's tunnel** (target `audio`). This reuses
+  the TLS-PSK channel instead of adding a second crypto layer in Rust. Trade-off: on lossy Wi-Fi a
+  retransmission can cause a dropout; revisit with UDP + AEAD if the hour-long test shows it matters.
+- Laptop: endpoint loopback of the default playback device at its mix format, no conversion,
+  event-driven, 10 ms chunks; silence is synthesised when Windows delivers nothing (loopback stalls
+  on silence). The laptop renders nothing it receives, so there is no feedback path; process-exclude
+  loopback is not needed yet.
+- Gaming PC: jitter buffer (40 ms target, 200 ms cap), event-driven shared-mode render. If the
+  stream format equals the device mix format, samples are handed over untouched; otherwise Windows'
+  converter is used (`AUTOCONVERTPCM` + `SRC_DEFAULT_QUALITY`) and the dashboard says so.
+- Gain: unity passes samples untouched; other values ramp over 10 ms; stop fades out over 10 ms.
+- Verified on one machine: a 1 kHz −12 dBFS tone arrives at −12 dBFS, 1000 Hz, channels intact;
+  real loopback capture and real device playback stream with no dropouts.
+- **Not done:** clock-drift correction (`RATEADJUST`); see `docs/phase2-testing.md`, Known limits.
+
 ## Consequences
 
 - One reboot on the laptop for VB-CABLE. Organisations need VB-Audio licences.

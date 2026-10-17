@@ -25,7 +25,11 @@ const DEAD_AFTER_MS = 6_500;
 const REQUEST_TIMEOUT_MS = 10_000;
 const RECONNECT_MAX_MS = 10_000;
 
-export type PeerRequest = { op: "input.prepare" } | { op: "input.release" };
+export type PeerRequest =
+  | { op: "input.prepare" }
+  | { op: "input.release" }
+  | { op: "audio.start"; route: "laptopToPc" }
+  | { op: "audio.stop"; route: "laptopToPc" };
 export type PeerEvent = { op: "input.status"; engine: InputEngineStatus; connected: boolean; entered: boolean };
 
 export interface LinkOptions {
@@ -57,6 +61,7 @@ function parseRequest(m: Record<string, unknown>): PeerRequest | null {
   const body = m.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") return null;
   if (body.op === "input.prepare" || body.op === "input.release") return { op: body.op };
+  if ((body.op === "audio.start" || body.op === "audio.stop") && body.route === "laptopToPc") return { op: body.op, route: body.route };
   return null;
 }
 
