@@ -155,3 +155,30 @@ test("a waiting audio route retries as soon as the laptop is back", async () => 
   assert.equal(store.state.audio.laptopToPc.status, "streaming");
   audio.dispose();
 });
+
+test("the laptop keeps its idle client running until the gaming PC releases it", async () => {
+  const { store, audio } = await setup();
+  store.update((s) => {
+    s.agent.machine = "laptop";
+  });
+  let report: (r: import("../src/engines.ts").InputReport) => void = () => {};
+  let stops = 0;
+  new Controller({
+    store,
+    input: {
+      kind: "deskflow",
+      onReport: (cb) => (report = cb),
+      activateRemote: () => Promise.reject(new Error("not used")),
+      deactivate: async () => void stops++,
+    },
+    audio,
+    peer: { onLink: () => {} },
+    pairing: new SimPairing(new SimWorld(5), store, () => {}),
+  });
+  // The client is up and connected, but the cursor is still on the gaming PC.
+  report({ target: "gaming-pc", engine: "running", hooksActive: true, clientConnected: true });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(stops, 0);
+  assert.equal(store.state.input.engine, "running");
+  audio.dispose();
+});

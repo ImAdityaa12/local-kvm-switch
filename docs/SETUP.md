@@ -142,7 +142,8 @@ All controls are on the **gaming PC dashboard**.
    **Press Ctrl+Alt+Right**.
 2. Press **Ctrl+Alt+Right**. The cursor moves to the laptop; the Laptop half turns green.
 3. Press **Ctrl+Alt+Left** to come back (or click **Return to Gaming PC**). The dashboard shows
-   **Input engine: Not running** and **Global input hooks: None installed**.
+   **Input engine: Not running** and **Global input hooks: None installed**, and the log says
+   *Local input confirmed. Input sharing stopped, no hooks installed.* That message is normal here.
 
 Switch back to the Gaming PC before starting a game with anti-cheat.
 
@@ -169,6 +170,7 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 | `npm.ps1 cannot be loaded because running scripts is disabled` | Use `npm.cmd` instead of `npm`. |
 | "Deskflow was not found at …" | Install `deskflow-1.27.0-win-x64.msi` on **that** machine. If installed elsewhere, add `--deskflow "C:\path\to\deskflow-core.exe"` to the agent command. A message starting with the other machine's name came from the other machine. |
 | "The Deskflow app or its service is already running Deskflow" | Part 1, step 4: quit the tray app and disable the Deskflow service. |
+| Clicking **Laptop** never reaches *Press Ctrl+Alt+Right* (or Ctrl+Alt+Right does nothing), and the laptop's log says *Local input confirmed…* right after the switch starts | The laptop is running an older version that stopped its own Deskflow straight away. Update the laptop (`git pull`, Part 2) and restart the laptop agent. |
 | Laptop shows **Unreachable** | Same network? Correct `--bind` address on the gaming PC? Allowed Node.js through the firewall for **Private** networks? Network set to **Private**, not Public, in Windows settings? |
 | Pairing: "Could not reach …" | Open pairing on the gaming PC first; it stays open for two minutes. Check the address. |
 | "The laptop's default playback device is the virtual cable" | On the laptop: Settings → System → Sound → Output → your speakers or headphones. |

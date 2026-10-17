@@ -84,9 +84,12 @@ export class Controller {
         this.#d.store.log("info", "Cursor came back to the Gaming PC");
       }
       // Gaming PC mode never keeps an engine with global hooks alive. If the
-      // cursor came home by hotkey or screen edge, stop the engine.
+      // cursor came home by hotkey or screen edge, stop the engine. Only the
+      // gaming PC decides this: the laptop's client is started and stopped by
+      // the gaming PC, and sits idle (target gaming-pc) until the hotkey.
       const s = this.#d.store.state.input;
-      if (s.target === "gaming-pc" && s.hooksActive && s.pending === null && s.engine === "running") {
+      const owner = this.#d.store.state.agent.machine === "gaming-pc";
+      if (owner && s.target === "gaming-pc" && s.hooksActive && s.pending === null && s.engine === "running") {
         this.#serialSwitch("gaming-pc").catch(() => {});
       }
     });
