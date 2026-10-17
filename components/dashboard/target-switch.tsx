@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import type { AgentState, Command, Machine } from "@/lib/protocol";
+import type { AgentState, Command, Hotkeys, Machine, SwitchStep } from "@/lib/protocol";
 import { ENGINE_TEXT } from "./format";
 import { ErrorNote, Fact, Status } from "./bits";
 
@@ -41,6 +41,7 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
           line="Local input. Nothing is intercepted or forwarded."
           active={input.target === "gaming-pc"}
           pending={pendingTarget === "gaming-pc" && input.target !== "gaming-pc"}
+          pendingText={stepText(input.pending?.step, input.hotkeys)}
           disabled={pendingTarget !== null}
           onChoose={choose}
         />
@@ -56,10 +57,20 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
           }
           active={input.target === "laptop"}
           pending={pendingTarget === "laptop" && input.target !== "laptop"}
+          pendingText={stepText(input.pending?.step, input.hotkeys)}
           disabled={pendingTarget !== null || (!laptopReady && input.target !== "laptop")}
           onChoose={choose}
         />
       </div>
+
+      {input.pending?.step === "press-hotkey" && input.hotkeys ? (
+        <div role="status" className="mt-2 flex flex-wrap items-center justify-between gap-4 bg-live-soft px-5 py-5 sm:px-6">
+          <p className="text-2xl font-semibold tracking-[-0.02em]">
+            Press <kbd>{input.hotkeys.toLaptop}</kbd> to move to the laptop
+          </p>
+          <p className="max-w-[48ch] text-ink-2">Deskflow is running and the laptop is connected. Moving the cursor takes its hotkey; a click here cannot do it yet.</p>
+        </div>
+      ) : null}
 
       {input.error ? <ErrorNote error={input.error} className="mt-2" /> : null}
 
@@ -76,7 +87,15 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
         <Fact term="Laptop input client">
           <Status tone={input.clientConnected ? "live" : "idle"}>{input.clientConnected ? "Connected" : "Not connected"}</Status>
         </Fact>
-        <Fact term="Switch hotkey">{input.hotkey ? <kbd>{input.hotkey}</kbd> : "None set"}</Fact>
+        <Fact term="Hotkeys while on the laptop">
+          {input.hotkeys ? (
+            <span>
+              <kbd>{input.hotkeys.toGamingPc}</kbd> comes back
+            </span>
+          ) : (
+            "None set"
+          )}
+        </Fact>
       </dl>
 
       <p className="mt-3 max-w-[70ch] text-ink-2">
@@ -86,12 +105,25 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
   );
 }
 
+const STEP_TEXT: Record<SwitchStep, string> = {
+  "waiting-for-laptop": "Asking the laptop to get ready",
+  "starting-engine": "Starting Deskflow",
+  "press-hotkey": "Waiting for the hotkey",
+  "stopping-engine": "Stopping Deskflow",
+};
+
+function stepText(step: SwitchStep | undefined, hotkeys: Hotkeys | undefined): string {
+  if (step === "press-hotkey" && hotkeys) return `Press ${hotkeys.toLaptop}`;
+  return step ? STEP_TEXT[step] : "Switching, waiting for the engine to confirm";
+}
+
 function Half({
   machine,
   name,
   line,
   active,
   pending,
+  pendingText,
   disabled,
   onChoose,
 }: {
@@ -100,6 +132,7 @@ function Half({
   line: string;
   active: boolean;
   pending: boolean;
+  pendingText: string;
   disabled: boolean;
   onChoose: (m: Machine) => void;
 }) {
@@ -122,7 +155,7 @@ function Half({
           <Status tone="idle" className="[&>span:first-child]:bg-current">Has the keyboard and mouse</Status>
         ) : pending ? (
           <Status tone="live" busy>
-            Switching, waiting for the engine to confirm
+            {pendingText}
           </Status>
         ) : (
           <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">{disabled ? "Unavailable" : "Switch here"}</span>

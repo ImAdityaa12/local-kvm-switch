@@ -39,7 +39,7 @@ Status: desk research done 2026-10-17. **No two-machine tests have been run yet.
    - (c) patch Deskflow's IPC (GPL-2.0 derivative work; not proposed).
 
    Proposed: (b) for Phase 1, spike (a).
-3. **Confirming the active screen.** `exitCommand` on the server runs a small notifier (`lan-kvm-notify exit`) that tells the agent the cursor left the gaming PC; `enterCommand` reports the return. This is documented, unlike log parsing.
+3. **Confirming the active screen.** `exitCommand` on the server runs a small notifier (`agent/notify.mjs`) that tells the agent the cursor left the gaming PC; `enterCommand` reports the return. Confirmed in source: `src/lib/deskflow/Computer.cpp` runs both on every enter/leave, primary or secondary, so hotkey and edge switches both fire them. The command is split with `QProcess::splitCommand`.
 4. **Return to Gaming PC** = stop the core (IPC `stop`, else terminate the process tree) and wait for exit. The server's own disconnect handling and the client's key release cover held keys; whether the *client* releases keys on an abrupt server exit is an open question for the spike.
 
 ### Anti-cheat
@@ -142,13 +142,27 @@ Microphone
 
 1. Can `SendInput` reliably fire Deskflow's `switchToScreen` hotkey? (spike)
 2. Does the laptop client release held keys when the server exits abruptly? (spike)
-3. Does `exitCommand`/`enterCommand` fire for hotkey switches as well as edge switches? (spike)
+3. ~~Does `exitCommand`/`enterCommand` fire for hotkey switches as well as edge switches?~~ Yes, from source (`Computer::enter`/`leave`). Still to observe on hardware.
 4. Native audio language: Rust (`wasapi` crate) vs C++. Needs a toolchain install — **your call**.
 5. Desktop shell: Tauri vs Electron.
 6. VB-CABLE signing and silent-install switches; written bundling permission if ever bundled.
 7. Wi-Fi client isolation detection: likely a UDP probe plus clear wording; design during Phase 1.
 
-## 8. Smallest next step
+## 8. Phase 1 status (2026-10-17)
+
+Built and tested on one machine (two agents over loopback), not yet on two machines:
+
+- Pairing by numeric comparison, peer link over TLS 1.2 PSK (ECDHE-PSK-CHACHA20-POLY1305).
+- **Deskflow tunnelled through the peer link.** Deskflow listens on `127.0.0.1:24810` with its own TLS
+  off; the laptop's client connects to `127.0.0.1:24811`, which the laptop agent tunnels through a
+  PSK-authenticated TLS connection. Only the paired laptop can reach Deskflow, Deskflow's port is
+  never on the network, and no Deskflow certificate fingerprints need managing.
+- Deskflow server/client supervision, settings generated from keys verified in v1.27.0 source,
+  enter/exit notifier, switch steps shown in the dashboard, cancellable switches.
+
+Two-machine test guide: `docs/phase1-testing.md`.
+
+## 9. Original smallest next step
 
 Install Deskflow v1.27.0 on both machines (GPL-2.0; installs a service by default, or use the portable
 zip), then build the **Deskflow input adapter** behind the existing `InputEngine` interface:

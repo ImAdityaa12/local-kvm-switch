@@ -93,6 +93,7 @@ export function useAgent() {
           case "welcome":
             attempt = 0;
             setStatus("connected");
+            setLastError(null);
             break;
           case "state":
             if (msg.seq < seqRef.current) break;

@@ -20,6 +20,14 @@ function fail<T>(reason: string): Parsed<T> {
   return { ok: false, reason };
 }
 
+/** IPv4 dotted quad or a plain host name; no ports, schemes or paths. */
+export function isLanAddress(v: string): boolean {
+  if (v.length === 0 || v.length > 253) return false;
+  const ipv4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+  const host = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+  return ipv4.test(v) || host.test(v);
+}
+
 export function parseCommand(raw: unknown): Parsed<Command> {
   if (!isObject(raw) || typeof raw.type !== "string") return fail("command must be an object with a type");
   const c = raw;
@@ -28,8 +36,15 @@ export function parseCommand(raw: unknown): Parsed<Command> {
       if (!onlyKeys(c, ["type", "target"])) return fail("unexpected field");
       if (!MACHINES.includes(c.target as Machine)) return fail("target must be gaming-pc or laptop");
       return { ok: true, value: { type: c.type, target: c.target as Machine } };
-    case "input.returnLocal":
     case "pairing.begin":
+      if (!onlyKeys(c, ["type", "address"])) return fail("unexpected field");
+      if (c.address === undefined) return { ok: true, value: { type: c.type } };
+      if (typeof c.address !== "string" || !isLanAddress(c.address)) return fail("address must be an IPv4 address or host name");
+      return { ok: true, value: { type: c.type, address: c.address } };
+    case "pairing.confirm":
+      if (!onlyKeys(c, ["type", "accept"]) || typeof c.accept !== "boolean") return fail("accept must be a boolean");
+      return { ok: true, value: { type: c.type, accept: c.accept } };
+    case "input.returnLocal":
     case "pairing.cancel":
     case "peer.forget":
       if (!onlyKeys(c, ["type"])) return fail("unexpected field");

@@ -12,6 +12,9 @@ import {
 } from "../../lib/protocol/index.ts";
 import { EngineError } from "./engines.ts";
 import type { Controller } from "./controller.ts";
+import { makeRateLimiter } from "./rate-limit.ts";
+
+export { makeRateLimiter };
 import type { Store } from "./store.ts";
 
 export const CONTROL_PATH = "/control";
@@ -27,6 +30,8 @@ export interface ServerOptions {
   allowedOrigins: string[];
   store: Store;
   controller: Controller;
+  /** Deskflow's enter/exit commands report here (see agent/notify.mjs). */
+  notify?: { token: string; onEvent(event: "enter" | "leave"): void };
 }
 
 function tokensMatch(a: string, b: string): boolean {
@@ -35,22 +40,28 @@ function tokensMatch(a: string, b: string): boolean {
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
-/** Token bucket: true when the message may proceed. */
-export function makeRateLimiter(burst = RATE_BURST, perSec = RATE_PER_SEC, now: () => number = Date.now) {
-  let tokens = burst;
-  let last = now();
-  return () => {
-    const t = now();
-    tokens = Math.min(burst, tokens + ((t - last) / 1000) * perSec);
-    last = t;
-    if (tokens < 1) return false;
-    tokens -= 1;
-    return true;
-  };
-}
-
 export function startControlServer(opts: ServerOptions): Promise<Server> {
-  const http = createServer((_req, res) => {
+  const http = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const n = opts.notify;
+    // Browsers always send Origin on cross-site POSTs; the notifier never does.
+    if (n && req.method === "POST" && url.pathname === "/notify" && !req.headers.origin) {
+      const given = String(req.headers["x-lan-kvm-notify"] ?? "");
+      if (!tokensMatch(given, n.token)) return void res.writeHead(403).end();
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (c: string) => {
+        body += c;
+        if (body.length > 16) req.destroy();
+      });
+      req.on("end", () => {
+        if (body === "enter" || body === "leave") {
+          n.onEvent(body);
+          res.writeHead(204).end();
+        } else res.writeHead(400).end();
+      });
+      return;
+    }
     res.writeHead(404).end();
   });
   const wss = new WebSocketServer({
@@ -80,7 +91,7 @@ export function startControlServer(opts: ServerOptions): Promise<Server> {
 
 function serve(ws: WebSocket, opts: ServerOptions): void {
   const { store, controller } = opts;
-  const allow = makeRateLimiter();
+  const allow = makeRateLimiter(RATE_BURST, RATE_PER_SEC);
   let authed = false;
   let unsubscribe: (() => void) | null = null;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;

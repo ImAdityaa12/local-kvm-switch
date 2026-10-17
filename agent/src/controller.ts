@@ -9,7 +9,9 @@ export const SWITCH_TIMEOUT_MS = 10_000;
 export const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000];
 
 export interface Pairing {
-  begin(): Promise<{ code: string; expiresAt: number }>;
+  /** Gaming PC: open a pairing window. Laptop: dial the gaming PC at `address`. */
+  begin(address?: string): Promise<void>;
+  confirm(accept: boolean): void;
   cancel(): void;
   forget(): Promise<void>;
 }
@@ -70,12 +72,22 @@ export class Controller {
 
     deps.input.onReport((report, error) => {
       const wasRemote = this.#d.store.state.input.target === "laptop";
+      const { step, ...rest } = report;
       this.#d.store.update((s) => {
-        Object.assign(s.input, report);
+        Object.assign(s.input, rest);
+        if (step && s.input.pending) s.input.pending.step = step;
         if (error) s.input.error = error;
       });
       if (wasRemote && report.target === "gaming-pc" && error) {
         this.#d.store.log("error", `Input engine stopped unexpectedly: ${error.message}. Local input confirmed.`);
+      } else if (wasRemote && report.target === "gaming-pc") {
+        this.#d.store.log("info", "Cursor came back to the Gaming PC");
+      }
+      // Gaming PC mode never keeps an engine with global hooks alive. If the
+      // cursor came home by hotkey or screen edge, stop the engine.
+      const s = this.#d.store.state.input;
+      if (s.target === "gaming-pc" && s.hooksActive && s.pending === null && s.engine === "running") {
+        this.#serialSwitch("gaming-pc").catch(() => {});
       }
     });
 
@@ -98,6 +110,12 @@ export class Controller {
       case "input.setTarget":
         return this.#serialSwitch(cmd.target);
       case "input.returnLocal":
+        // The emergency action never waits behind a switch in progress: stop the
+        // engine now, which makes a pending switch to the laptop fail fast.
+        if (store.state.input.pending?.target === "laptop") {
+          store.log("warn", "Switch to laptop cancelled");
+          await this.#d.input.deactivate().catch(() => {});
+        }
         return this.#serialSwitch("gaming-pc");
       case "audio.setEnabled":
         return cmd.enabled ? this.#startRoute(cmd.route) : this.#stopRoute(cmd.route, "Turned off");
@@ -126,19 +144,15 @@ export class Controller {
           s.audio[cmd.route].muted = cmd.muted;
         });
         return;
-      case "pairing.begin": {
-        const pairing = await this.#d.pairing.begin();
-        store.update((s) => {
-          s.peer.pairing = pairing;
-        });
-        return;
-      }
+      case "pairing.begin":
+        if (store.state.peer.link !== "unpaired") {
+          throw new EngineError({ code: "bad-request", message: "Unpair the current device before pairing a new one." });
+        }
+        return this.#d.pairing.begin(cmd.address);
+      case "pairing.confirm":
+        return this.#d.pairing.confirm(cmd.accept);
       case "pairing.cancel":
-        this.#d.pairing.cancel();
-        store.update((s) => {
-          s.peer.pairing = null;
-        });
-        return;
+        return this.#d.pairing.cancel();
       case "peer.forget":
         await this.#serialSwitch("gaming-pc");
         await Promise.all([this.#stopRoute("laptopToPc", "Peer removed"), this.#stopRoute("micToLaptop", "Peer removed")]);
@@ -193,7 +207,7 @@ export class Controller {
 
     try {
       if (target === "laptop") {
-        await withTimeout(input.activateRemote(), SWITCH_TIMEOUT_MS, "Switch to laptop");
+        await withTimeout(input.activateRemote(), input.switchTimeoutMs ?? SWITCH_TIMEOUT_MS, "Switch to laptop");
         store.log("info", "Keyboard and mouse now control the laptop");
       } else {
         await withTimeout(input.deactivate(), SWITCH_TIMEOUT_MS, "Return to Gaming PC");
@@ -234,9 +248,10 @@ export class Controller {
       s.peer.error = online ? undefined : error;
       if (online) s.peer.lastSeenAt = this.#now();
     });
-    if (online && prev !== "online") store.log("info", "Laptop is reachable");
+    const who = store.state.peer.name ?? (store.state.agent.machine === "gaming-pc" ? "Laptop" : "Gaming PC");
+    if (online && prev !== "online") store.log("info", `${who} is reachable`);
     if (!online && prev === "online") {
-      store.log("warn", `Laptop disconnected${error ? `: ${error.message}` : ""}`);
+      store.log("warn", `${who} disconnected${error ? `: ${error.message}` : ""}`);
       if (store.state.input.target === "laptop" || store.state.input.pending?.target === "laptop") {
         store.log("warn", "Returning keyboard and mouse to the Gaming PC");
         this.#serialSwitch("gaming-pc").catch(() => {});

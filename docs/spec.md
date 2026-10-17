@@ -300,3 +300,6 @@ Desk research results; see `docs/feasibility-report.md` and `docs/adr/`. Not yet
   user** (donationware; bundling allowed with conditions). Voicemeeter is an accepted alternative.
 - Laptop → PC audio needs no driver (WASAPI loopback / process loopback).
 - Native audio helper language is open (Rust `wasapi` crate proposed); needs a toolchain install.
+- Phase 1 (2026-10-17): pairing uses numeric comparison (both screens show a code; both users
+  confirm) rather than typing a code, which satisfies §8's "equivalent secure flow". Deskflow runs on
+  loopback and is tunnelled through the TLS-PSK peer link instead of using its own TLS.

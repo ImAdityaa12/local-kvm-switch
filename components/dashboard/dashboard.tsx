@@ -6,7 +6,8 @@ import type { AgentState, Command } from "@/lib/protocol";
 import { TargetSwitch } from "./target-switch";
 import { AudioSection } from "./audio-route";
 import { Activity, PeerPanel } from "./peer-panel";
-import { ErrorNote, Status } from "./bits";
+import { ErrorNote, Fact, Status } from "./bits";
+import { ENGINE_TEXT } from "./format";
 
 function useNow(intervalMs = 1000) {
   const [now, setNow] = useState(0);
@@ -40,6 +41,7 @@ export function Dashboard() {
 
 function TopBar({ status, state, send }: { status: ConnectionStatus; state: AgentState | null; send: (c: Command) => Promise<unknown> }) {
   const remote = state && (state.input.target === "laptop" || state.input.hooksActive || state.input.pending?.target === "laptop");
+  const onLaptop = state?.agent.machine === "laptop";
   return (
     <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-5">
       <p className="text-xl font-semibold tracking-[-0.02em]">LAN KVM</p>
@@ -65,7 +67,7 @@ function TopBar({ status, state, send }: { status: ConnectionStatus; state: Agen
                 : "press h-11 bg-surface-1 px-5 font-medium hover:bg-surface-2"
             }
           >
-            Return to Gaming PC
+            {onLaptop ? "Give input back to Gaming PC" : "Return to Gaming PC"}
           </button>
         ) : null}
       </div>
@@ -90,7 +92,7 @@ function Connected({
     <main>
       {state.agent.simulated ? <SimBar state={state} send={send} /> : null}
 
-      {lastError ? (
+      {lastError && lastError.message !== state.input.error?.message && lastError.message !== state.peer.error?.message ? (
         <div className="mb-2 flex items-start gap-2">
           <ErrorNote error={lastError} className="flex-1" />
           <button type="button" onClick={clearError} className="press h-full shrink-0 bg-danger-field px-4 py-3 font-medium hover:opacity-80">
@@ -99,8 +101,8 @@ function Connected({
         </div>
       ) : null}
 
-      <TargetSwitch state={state} send={send} />
-      <AudioSection state={state} send={send} now={now} />
+      {state.agent.machine === "laptop" ? <LaptopInput state={state} /> : <TargetSwitch state={state} send={send} />}
+      {state.agent.engines.audio === "none" ? <AudioLater /> : <AudioSection state={state} send={send} now={now} />}
 
       <div className="mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         <PeerPanel state={state} send={send} now={now} />
@@ -114,6 +116,54 @@ function Connected({
         </p>
       </footer>
     </main>
+  );
+}
+
+/** On the laptop the target is chosen on the gaming PC; this shows what the laptop sees. */
+function LaptopInput({ state }: { state: AgentState }) {
+  const { input, peer } = state;
+  const here = input.target === "laptop";
+  return (
+    <section aria-labelledby="laptop-heading" className="rise" style={{ "--i": 1 } as React.CSSProperties}>
+      <div className={here ? "bg-live p-6 text-live-ink sm:p-10" : "bg-surface-1 p-6 sm:p-10"}>
+        <h1 id="laptop-heading" className="text-target leading-[0.92] font-semibold tracking-[-0.045em]">
+          {here ? "This laptop has the keyboard" : "Gaming PC has the keyboard"}
+        </h1>
+        <p className={here ? "mt-5 max-w-[52ch] text-lg opacity-90" : "mt-5 max-w-[52ch] text-lg text-ink-2"}>
+          {here
+            ? `Input from ${peer.name ?? "the gaming PC"} is controlling this laptop.`
+            : "Switch to the laptop from the gaming PC's dashboard."}
+          {input.hotkeys ? ` ${input.hotkeys.toGamingPc} sends it back.` : ""}
+        </p>
+      </div>
+      {input.error ? <ErrorNote error={input.error} className="mt-2" /> : null}
+      <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-5 bg-surface-1 px-5 py-5 sm:px-6 lg:grid-cols-3">
+        <Fact term="Deskflow client">
+          <Status tone={input.engine === "running" ? "live" : input.engine === "error" ? "danger" : "idle"}>{ENGINE_TEXT[input.engine]}</Status>
+        </Fact>
+        <Fact term="Connected to the gaming PC">
+          <Status tone={input.clientConnected ? "live" : "idle"}>{input.clientConnected ? "Yes" : "No"}</Status>
+        </Fact>
+        <Fact term="Network link">
+          <Status tone={peer.link === "online" ? "live" : peer.link === "unpaired" ? "idle" : "danger"}>
+            {peer.link === "online" ? "Reachable" : peer.link === "unpaired" ? "Not paired" : "Unreachable"}
+          </Status>
+        </Fact>
+      </dl>
+    </section>
+  );
+}
+
+function AudioLater() {
+  return (
+    <section aria-labelledby="audio-heading" className="rise mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" style={{ "--i": 2 } as React.CSSProperties}>
+      <h2 id="audio-heading" className="text-title leading-tight font-semibold tracking-[-0.03em]">
+        Audio comes next
+      </h2>
+      <p className="max-w-[60ch] text-lg text-ink-2">
+        Laptop sound to your IEM and the IEM microphone to the laptop need a native audio helper, which is Phase 2. Nothing is routed today, so nothing here claims otherwise.
+      </p>
+    </section>
   );
 }
 

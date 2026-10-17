@@ -18,11 +18,15 @@ while the cursor is on the server.
   not a derivative work.
 - **Gaming PC mode: no `deskflow-core` process on the gaming PC.** Local mode is reported only after
   the process has exited.
-- Laptop mode: start `deskflow-core server -s <generated settings>`; the laptop runs
-  `deskflow-core client` continuously. Moving the cursor uses a configured `switchToScreen` hotkey
+- Laptop mode: the gaming PC asks the laptop agent to start `deskflow-core client`, then starts
+  `deskflow-core server -s <generated settings>`; both stop when Gaming PC is selected again. Moving the cursor uses a configured `switchToScreen` hotkey
   (user presses it in Phase 1; automated press is a spike).
 - Confirm screen changes through `enterCommand`/`exitCommand`, not log parsing.
-- TLS on, fingerprint pinning on both sides; fingerprints exchanged during our own pairing.
+- ~~TLS on, fingerprint pinning on both sides.~~ Revised 2026-10-17: Deskflow listens on loopback
+  with its TLS off, and the laptop reaches it only through a tunnel inside our PSK-authenticated peer
+  link (ADR 0003). One trust mechanism instead of two, and no Deskflow port on the network.
+- Hotkeys: Ctrl+Alt+Right to the laptop, Ctrl+Alt+Left back. When the cursor comes back by hotkey or
+  edge, the agent stops the server, so Gaming PC mode again has no Deskflow process.
 
 ## Consequences
 

@@ -6,8 +6,10 @@ import type {
   AudioDevice,
   AudioFormat,
   EngineKind,
+  Hotkeys,
   InputState,
   RouteId,
+  SwitchStep,
   VirtualEndpointState,
 } from "../../lib/protocol/index.ts";
 
@@ -19,11 +21,16 @@ export class EngineError extends Error {
   }
 }
 
-export type InputReport = Pick<InputState, "target" | "engine" | "hooksActive" | "clientConnected">;
+export type InputReport = Pick<InputState, "target" | "engine" | "hooksActive" | "clientConnected"> & {
+  /** Progress of an in-flight switch, shown to the user. */
+  step?: SwitchStep;
+};
 
 export interface InputEngine {
   readonly kind: EngineKind;
-  readonly hotkey?: string;
+  readonly hotkeys?: Hotkeys;
+  /** How long a switch to the laptop may take, including the user pressing a hotkey. */
+  readonly switchTimeoutMs?: number;
   /**
    * Start sharing and move control to the laptop. Resolves only once the engine
    * confirms the laptop is the active screen.

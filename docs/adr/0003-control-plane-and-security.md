@@ -16,18 +16,35 @@ Date: 2026-10-17
 - `next dev` / `next start` bind to `127.0.0.1` (the Next default is `0.0.0.0`).
 - One agent per port, so a second instance fails to start instead of fighting the first.
 
-## Peer link (gaming PC ↔ laptop) — proposed
+## Peer link (gaming PC ↔ laptop) — implemented 2026-10-17
 
-- Explicit pairing: the gaming PC shows a 6-digit one-time code (2 min expiry); the laptop user types it.
-  Use a PAKE (e.g. SPAKE2 or CPace) so the short code cannot be brute-forced offline, then exchange and
-  pin long-term Ed25519 keys and the Deskflow TLS fingerprints.
-- Control and audio keys derived from the pinned keys; audio frames use an AEAD (ChaCha20-Poly1305 or
-  AES-GCM) with sequence numbers as nonces.
-- Bind to the private-network interface chosen in settings. Ask before adding a Windows Firewall rule
-  (private profile only).
+- **Pairing by numeric comparison** (as in Bluetooth LE Secure Connections), chosen over a typed code
+  because it needs no PAKE library: X25519 keys, a commitment from the gaming PC before nonces are
+  revealed, and a 6-digit code from both keys and nonces shown on both screens. Both users confirm.
+  A machine in the middle wins with probability one in a million per attempt, and each attempt needs a
+  person to confirm. The pairing window is open for 2 minutes on TCP 47822, one attempt at a time.
+- **Link**: TLS 1.2 with the pre-shared key from pairing (HKDF-SHA256 over the X25519 secret and both
+  nonces), cipher ECDHE-PSK-CHACHA20-POLY1305 (forward secrecy). Only Node's built-in TLS is used; no
+  hand-made record protocol. TCP 47821 on the address given with `--bind` (or the first private IPv4).
+- Messages are newline-delimited JSON, capped at 64 KiB per frame, validated, and rate-limited
+  (50/s, burst 100). Heartbeat every 2 s; the link is down after 6.5 s of silence.
+- **Tunnels**: separate PSK-authenticated TLS connections whose first frame names a loopback target on
+  the gaming PC (only `deskflow` is allowed). Used for Deskflow (ADR 0001).
+- Key storage: `%LOCALAPPDATA%\LanKvmSwitcher\peer.json`. TODO: DPAPI.
+- Windows prompts for the firewall the first time Node listens; the guide says to allow private
+  networks only. The agent adds no rule itself.
+- Audio (Phase 2) will derive its own keys from the same PSK.
 
 ## Threat model (short)
 
 - In scope: other devices on the LAN, other websites in the user's browser, a second local user account.
+- **Known gap (Phase 1):** while Laptop mode is active, Deskflow's loopback ports (24810 on the gaming
+  PC, 24811 on the laptop) accept any local process, including one run by another Windows user, and
+  Deskflow's own TLS is off. Such a process could connect as the client and receive keystrokes. The
+  ports exist only while Laptop mode is active. Fix planned: turn Deskflow TLS back on inside the
+  tunnel with fingerprints exchanged over the peer link, so a second layer authenticates the client.
 - Out of scope: malware already running as the same user (it can read the token and drive input anyway).
-- Logs never contain audio content, keystrokes, or tokens.
+- Logs never contain audio content, keystrokes, or tokens. Deskflow runs at log level Debug, which
+  excludes key events (those are Verbose); its output is parsed in memory and never written to disk.
+- The Deskflow enter/exit notifier posts to `127.0.0.1:<agent>/notify` with a per-run random token;
+  requests carrying an `Origin` header (any browser) are refused.

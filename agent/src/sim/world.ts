@@ -5,6 +5,7 @@
 import { randomInt } from "node:crypto";
 import type { AgentError, AudioFormat, RouteId, VirtualEndpointState } from "../../../lib/protocol/index.ts";
 import type { Pairing, Simulation } from "../controller.ts";
+import type { Store } from "../store.ts";
 import { EngineError, type AudioEngine, type InputEngine, type InputReport } from "../engines.ts";
 
 const UNREACHABLE: AgentError = {
@@ -48,10 +49,11 @@ export class SimWorld implements Simulation {
 
 export class SimInput implements InputEngine {
   readonly kind = "simulated" as const;
-  readonly hotkey = "Scroll Lock";
+  readonly hotkeys = { toLaptop: "Ctrl+Alt+Right", toGamingPc: "Ctrl+Alt+Left" };
   #world: SimWorld;
   #cb: (r: InputReport, e?: AgentError) => void = () => {};
   #running = false;
+  #gen = 0;
 
   constructor(world: SimWorld) {
     this.#world = world;
@@ -72,16 +74,27 @@ export class SimInput implements InputEngine {
   }
 
   async activateRemote(): Promise<void> {
-    this.#cb({ target: "gaming-pc", engine: "starting", hooksActive: false, clientConnected: false });
+    const gen = ++this.#gen;
+    const check = () => {
+      if (gen !== this.#gen) throw new EngineError({ code: "engine-crashed", message: "Switch cancelled" });
+    };
+    this.#cb({ target: "gaming-pc", engine: "starting", hooksActive: false, clientConnected: false, step: "starting-engine" });
     await this.#world.delay();
+    check();
     this.#running = true;
     this.#cb({ target: "gaming-pc", engine: "running", hooksActive: true, clientConnected: false });
     await this.#world.delay();
+    check();
     if (!this.#world.peerReachable) throw new EngineError({ ...UNREACHABLE, message: "Laptop client did not connect" });
+    this.#cb({ target: "gaming-pc", engine: "running", hooksActive: true, clientConnected: true, step: "press-hotkey" });
+    // Stands in for the user pressing the hotkey.
+    await new Promise((r) => setTimeout(r, this.#world.latencyMs * 3));
+    check();
     this.#cb({ target: "laptop", engine: "running", hooksActive: true, clientConnected: true });
   }
 
   async deactivate(): Promise<void> {
+    this.#gen++;
     if (!this.#running) {
       this.#cb({ target: "gaming-pc", engine: "stopped", hooksActive: false, clientConnected: false });
       return;
@@ -205,31 +218,80 @@ export class SimAudio implements AudioEngine {
 
 export class SimPairing implements Pairing {
   #world: SimWorld;
+  #store: Store;
   #onPaired: () => void;
-  #timer: ReturnType<typeof setTimeout> | null = null;
+  #timers: ReturnType<typeof setTimeout>[] = [];
 
-  constructor(world: SimWorld, onPaired: () => void) {
+  constructor(world: SimWorld, store: Store, onPaired: () => void) {
     this.#world = world;
+    this.#store = store;
     this.#onPaired = onPaired;
   }
 
-  async begin() {
+  async begin(): Promise<void> {
     this.cancel();
-    const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
-    // In simulation the "laptop" types the code a few seconds later.
-    this.#timer = setTimeout(() => {
-      this.#timer = null;
-      if (this.#world.peerReachable) this.#onPaired();
-    }, 4_000);
-    return { code, expiresAt: Date.now() + 120_000 };
+    const expiresAt = Date.now() + 120_000;
+    this.#store.update((s) => {
+      s.peer.pairing = { stage: "listening", expiresAt, address: "192.0.2.10" };
+    });
+    // In simulation the "laptop" dials in a few seconds later.
+    this.#later(3_000, () => {
+      if (!this.#world.peerReachable) return;
+      const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
+      this.#store.update((s) => {
+        s.peer.pairing = { stage: "confirm", expiresAt, code, peerName: "Laptop (simulated)", localConfirmed: false, remoteConfirmed: false };
+      });
+      // ...and its user confirms the code shortly after.
+      this.#later(2_500, () => this.#remoteConfirm());
+    });
+  }
+
+  confirm(accept: boolean): void {
+    const p = this.#store.state.peer.pairing;
+    if (p?.stage !== "confirm") throw new EngineError({ code: "bad-request", message: "There is no pairing code to confirm." });
+    if (!accept) {
+      this.cancel();
+      this.#store.log("warn", "Pairing failed: You rejected the pairing code.");
+      return;
+    }
+    this.#store.update((s) => {
+      if (s.peer.pairing?.stage === "confirm") s.peer.pairing.localConfirmed = true;
+    });
+    this.#maybeDone();
+  }
+
+  #remoteConfirm(): void {
+    this.#store.update((s) => {
+      if (s.peer.pairing?.stage === "confirm") s.peer.pairing.remoteConfirmed = true;
+    });
+    this.#maybeDone();
+  }
+
+  #maybeDone(): void {
+    const p = this.#store.state.peer.pairing;
+    if (p?.stage === "confirm" && p.localConfirmed && p.remoteConfirmed) {
+      this.#clear();
+      this.#onPaired();
+    }
   }
 
   cancel(): void {
-    if (this.#timer) clearTimeout(this.#timer);
-    this.#timer = null;
+    this.#clear();
+    this.#store.update((s) => {
+      s.peer.pairing = null;
+    });
   }
 
   async forget(): Promise<void> {
     this.cancel();
+  }
+
+  #later(ms: number, fn: () => void): void {
+    this.#timers.push(setTimeout(fn, ms));
+  }
+
+  #clear(): void {
+    for (const t of this.#timers) clearTimeout(t);
+    this.#timers = [];
   }
 }

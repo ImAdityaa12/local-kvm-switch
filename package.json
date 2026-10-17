@@ -8,7 +8,7 @@
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"agent/test/*.test.ts\"",
+    "test": "node --test --test-timeout=20000 \"agent/test/*.test.ts\"",
     "agent:sim": "node agent/src/main.ts --simulate"
   },
   "dependencies": {

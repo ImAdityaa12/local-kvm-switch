@@ -13,7 +13,7 @@ async function setup(opts: { unpaired?: boolean; endpoint?: boolean } = {}) {
   const devices = await audio.listDevices();
   const route = { enabled: false, status: "off" as const, format: null, volume: 1, muted: false, levelDb: null, retry: null };
   const initial: AgentState = {
-    agent: { name: "t", machine: "gaming-pc", version: "0", protocol: 1, simulated: true, engines: { input: "simulated", audio: "simulated" } },
+    agent: { name: "t", machine: "gaming-pc", version: "0", protocol: 1, simulated: true, engines: { input: "simulated", audio: "simulated" }, lanAddress: null },
     peer: opts.unpaired ? { link: "unpaired", pairing: null } : { link: "online", name: "L", pairing: null },
     input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false },
     audio: {
@@ -30,7 +30,7 @@ async function setup(opts: { unpaired?: boolean; endpoint?: boolean } = {}) {
     input,
     audio,
     peer: world.peer,
-    pairing: new SimPairing(world, () => {}),
+    pairing: new SimPairing(world, store, () => {}),
     sim: world,
     setTimer: (fn) => timers.push(fn),
     clearTimer: () => {},
@@ -81,7 +81,7 @@ test("laptop disconnect while remote returns input to the gaming PC", async () =
   assert.equal(store.state.peer.link, "offline");
   assert.equal(store.state.input.target, "gaming-pc");
   assert.equal(store.state.input.hooksActive, false);
-  assert.ok(store.state.events.some((e) => e.message.includes("Laptop disconnected")));
+  assert.ok(store.state.events.some((e) => e.message === "L disconnected: No reply from the laptop agent"));
   audio.dispose();
 });
 
@@ -126,5 +126,20 @@ test("choosing a device that does not exist is rejected and nothing changes", as
   const before = store.state.audio.laptopToPc.deviceId;
   await assert.rejects(controller.handle({ type: "audio.setDevice", route: "laptopToPc", deviceId: "nope" }));
   assert.equal(store.state.audio.laptopToPc.deviceId, before);
+  audio.dispose();
+});
+
+test("return to gaming PC cancels a switch that is still waiting", async () => {
+  const { store, controller, audio } = await setup();
+  const switching = controller.handle({ type: "input.setTarget", target: "laptop" });
+  await new Promise((r) => setTimeout(r, 8));
+  assert.equal(store.state.input.pending?.target, "laptop");
+  const started = Date.now();
+  await controller.handle({ type: "input.returnLocal" });
+  await assert.rejects(switching);
+  assert.ok(Date.now() - started < 1000, "did not wait for the switch timeout");
+  assert.equal(store.state.input.target, "gaming-pc");
+  assert.equal(store.state.input.hooksActive, false);
+  assert.equal(store.state.input.pending, null);
   audio.dispose();
 });

@@ -34,6 +34,22 @@ export type ErrorCode =
 
 export type PeerLink = "unpaired" | "offline" | "connecting" | "online";
 
+/**
+ * Pairing uses numeric comparison: both machines show the same six digits and
+ * both users confirm. Nothing is trusted until both have confirmed.
+ */
+export type PairingState =
+  | { stage: "listening"; expiresAt: number; address: string | null }
+  | { stage: "connecting"; expiresAt: number; address: string }
+  | {
+      stage: "confirm";
+      expiresAt: number;
+      code: string;
+      peerName: string;
+      localConfirmed: boolean;
+      remoteConfirmed: boolean;
+    };
+
 export interface PeerState {
   link: PeerLink;
   name?: string;
@@ -41,16 +57,23 @@ export interface PeerState {
   /** Epoch ms of the last authenticated message from the peer. */
   lastSeenAt?: number;
   error?: AgentError;
-  pairing?: { code: string; expiresAt: number } | null;
+  pairing?: PairingState | null;
 }
 
 export type InputEngineStatus = "stopped" | "starting" | "running" | "stopping" | "error";
+
+export type SwitchStep = "waiting-for-laptop" | "starting-engine" | "press-hotkey" | "stopping-engine";
+
+export interface Hotkeys {
+  toLaptop: string;
+  toGamingPc: string;
+}
 
 export interface InputState {
   /** The target the engine has confirmed. Never set optimistically. */
   target: Machine;
   /** A switch the user asked for that the engine has not confirmed yet. */
-  pending: { target: Machine; since: number } | null;
+  pending: { target: Machine; since: number; step?: SwitchStep } | null;
   engine: InputEngineStatus;
   /**
    * True only while an input-sharing process that installs global keyboard or
@@ -59,7 +82,7 @@ export interface InputState {
   hooksActive: boolean;
   /** The laptop's input client is connected to the engine. */
   clientConnected: boolean;
-  hotkey?: string;
+  hotkeys?: Hotkeys;
   error?: AgentError;
 }
 
@@ -117,6 +140,8 @@ export interface AgentState {
     protocol: number;
     simulated: boolean;
     engines: { input: EngineKind; audio: EngineKind };
+    /** LAN address the peer link listens on (gaming PC) or dials from (laptop). */
+    lanAddress: string | null;
   };
   peer: PeerState;
   input: InputState;
@@ -137,7 +162,8 @@ export type Command =
   | { type: "audio.setDevice"; route: RouteId; deviceId: string }
   | { type: "audio.setVolume"; route: RouteId; volume: number }
   | { type: "audio.setMuted"; route: RouteId; muted: boolean }
-  | { type: "pairing.begin" }
+  | { type: "pairing.begin"; address?: string }
+  | { type: "pairing.confirm"; accept: boolean }
   | { type: "pairing.cancel" }
   | { type: "peer.forget" }
   | { type: "sim.setPeerReachable"; reachable: boolean }

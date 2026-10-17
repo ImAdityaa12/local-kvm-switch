@@ -3,9 +3,10 @@
 One keyboard, mouse and IEM on the gaming PC; choose whether they work on the gaming PC or on a laptop
 over the local network, and route audio both ways. Spec: [`docs/spec.md`](docs/spec.md).
 
-**Status: Phase 0.** The dashboard and the agent's control plane are built and tested against
-**simulated** engines. No real keyboard, mouse or audio is routed yet. Read
-[`docs/feasibility-report.md`](docs/feasibility-report.md) before building the real engines.
+**Status: Phase 1 (input), awaiting two-machine tests.** Pairing, the encrypted link between the
+two agents, and Deskflow-based input switching are built and tested on one machine. Audio is Phase 2.
+To try it on your gaming PC and laptop, follow [`docs/phase1-testing.md`](docs/phase1-testing.md).
+Background: [`docs/feasibility-report.md`](docs/feasibility-report.md).
 
 ## Layout
 
@@ -16,15 +17,27 @@ over the local network, and route audio both ways. Spec: [`docs/spec.md`](docs/s
 | `lib/use-agent.ts` | Dashboard connection: token handling, reconnect, command acks. |
 | `agent/src/` | Agent control plane (Node 22.18+, runs TypeScript directly). |
 | `agent/src/engines.ts` | Input and audio adapter interfaces; real engines plug in here. |
+| `agent/src/peer/` | Pairing (numeric comparison), TLS-PSK peer link, tunnels, trust store. |
+| `agent/src/deskflow/` | Deskflow settings, process supervision, server and client engines. |
+| `agent/notify.mjs` | Run by Deskflow on enter/leave; tells the agent where the cursor is. |
 | `agent/src/sim/` | Simulated engines for development. |
 | `docs/` | Feasibility report, ADRs, spec. |
 
 ## Run it
 
+Simulated (one machine, no Deskflow needed):
+
 ```bash
 npm install
 npm run agent:sim     # terminal 1: prints a dashboard link with a one-time token
 npm run dev           # terminal 2: dashboard on http://127.0.0.1:3000
+```
+
+Real (two machines, Deskflow 1.27 installed): see [`docs/phase1-testing.md`](docs/phase1-testing.md).
+
+```bash
+node agent/src/main.ts --machine gaming-pc --bind <this PC's LAN IP>
+node agent/src/main.ts --machine laptop
 ```
 
 Open the link the agent prints. The token travels in the URL fragment, is moved into this tab's
@@ -51,3 +64,5 @@ npm run lint
 - Audio and input are separate adapters; audio failures never touch input state.
 - A missing audio device stops the route; the agent never switches to another device on its own.
 - The control channel is loopback-only, origin-checked, token-authenticated, size-capped and rate-limited.
+- The two agents trust each other only after pairing; Deskflow is reachable only through their encrypted link.
+- Return to Gaming PC cancels a switch in progress instead of waiting behind it.
