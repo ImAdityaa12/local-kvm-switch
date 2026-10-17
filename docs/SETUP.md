@@ -179,8 +179,17 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 | Dashboard says **No agent** | The agent window was closed. Start it again and open the new link. |
 | Port 47820 is busy | An agent is already running. Close the other window first. |
 
-When asking for help, send a screenshot of the red error and the **What the agent did** list from the
-machine that shows it.
+When asking for help, send from the machine that shows the error:
+
+1. The **WARN** / **ERROR** lines in the agent window (terminal 1). Errors are printed there as
+   text, so you can copy them.
+2. Deskflow's log from its last run. Press **Win+R**, paste
+   `%LOCALAPPDATA%\LanKvmSwitcher\deskflow` and press Enter. Send `deskflow-server.log` (gaming PC)
+   or `deskflow-client.log` (laptop). Each switch overwrites it, so copy it before trying again.
+   The log has no keystrokes in it.
+
+A *"Deskflow stopped unexpectedly (exit code …)"* error includes Deskflow's last error line, which
+usually says what went wrong.
 
 ---
 

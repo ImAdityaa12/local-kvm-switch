@@ -3,7 +3,13 @@
 //   node fake-deskflow.mjs <server|client> -s <settings> [behaviour via FAKE_DESKFLOW env]
 const [mode] = process.argv.slice(2);
 const behaviour = process.env.FAKE_DESKFLOW ?? "ok";
-if (behaviour === "crash") setTimeout(() => process.exit(3), 100);
+if (behaviour === "crash") {
+  setTimeout(() => {
+    console.error("[2026-10-17T12:00:00] ERROR: cannot listen for clients: address already in use");
+    console.log("[2026-10-17T12:00:00] DEBUG: stopping server");
+    setTimeout(() => process.exit(3), 20);
+  }, 100);
+}
 if (mode === "server") {
   console.log("[2026-10-17T12:00:00] INFO: started server");
   if (behaviour !== "no-client") setTimeout(() => console.log('[2026-10-17T12:00:00] DEBUG: client "laptop" has connected'), 80);

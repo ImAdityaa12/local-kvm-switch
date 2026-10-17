@@ -82,6 +82,9 @@ export class Controller {
         this.#d.store.log("error", `Input engine stopped unexpectedly: ${error.message}. Local input confirmed.`);
       } else if (wasRemote && report.target === "gaming-pc") {
         this.#d.store.log("info", "Cursor came back to the Gaming PC");
+      } else if (error && this.#d.store.state.input.pending === null) {
+        // A switch in progress logs its own failure.
+        this.#d.store.log("error", `Input engine: ${error.message}`);
       }
       // Gaming PC mode never keeps an engine with global hooks alive. If the
       // cursor came home by hotkey or screen edge, stop the engine. Only the

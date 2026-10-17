@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commandLine, iniString, serverLayout, settingsIni } from "../src/deskflow/config.ts";
-import { DeskflowServerInput, type DeskflowPaths } from "../src/deskflow/engines.ts";
+import { DeskflowServerInput, crashed, lastError, type DeskflowPaths } from "../src/deskflow/engines.ts";
 import type { InputReport } from "../src/engines.ts";
 
 /** Reference reader for a quoted QSettings INI string (the subset we emit). */
@@ -99,11 +99,25 @@ test("server engine: the cursor leaving via the notifier also confirms the lapto
 });
 
 test("server engine: a crash reports local input with an error", async () => {
-  const { e, reports } = engine("crash");
-  await assert.rejects(e.activateRemote(), /stopped unexpectedly/);
+  const { e, p, reports } = engine("crash");
+  await assert.rejects(e.activateRemote(), /stopped unexpectedly \(exit code 3\)\. Last output: .*ERROR: cannot listen for clients/);
   const last = reports.at(-1)!;
   assert.equal(last.hooksActive, false);
   assert.equal(last.target, "gaming-pc");
+  // The whole run is kept on disk for troubleshooting.
+  await new Promise((r) => setTimeout(r, 50));
+  const log = readFileSync(join(p.dir, "deskflow-server.log"), "utf8");
+  assert.match(log, /INFO: started server/);
+  assert.match(log, /ERROR: cannot listen for clients/);
+  assert.match(log, /# exited .* with code 3/);
+});
+
+test("crash messages prefer Deskflow's last error and show Windows crash codes in hex", () => {
+  assert.equal(lastError(["INFO: a", "ERROR: b", "DEBUG: c"]), "ERROR: b");
+  assert.equal(lastError(["INFO: a", "DEBUG: c"]), "DEBUG: c");
+  assert.equal(lastError([]), undefined);
+  assert.match(crashed(3221225477, [], "x.log").message, /exit code 0xC0000005\)$/);
+  assert.match(crashed(1, [], "x.log").hint!, /x\.log/);
 });
 
 test("server engine: a missing Deskflow install is a clear error", async () => {

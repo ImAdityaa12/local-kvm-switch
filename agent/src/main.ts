@@ -360,6 +360,24 @@ const role = values.simulate ? "simulated" : machine;
 console.log(`LAN KVM agent ${VERSION} (${role}) listening on 127.0.0.1:${port}`);
 if (!values.simulate && machine === "gaming-pc") console.log(`Peer link on ${store.state.agent.lanAddress}:${LINK_PORT} (pairing opens ${store.state.agent.lanAddress}:47822 on request)`);
 console.log(`Open the dashboard with this link (the token stays in the URL fragment, never sent to a server):\n\n  ${link}\n`);
+if (!values.simulate) console.log(`Deskflow's output from its last run is saved in ${join(dir, "deskflow")} (deskflow-server.log or deskflow-client.log).\n`);
+
+// Warnings and errors also go to this window, so they can be copied as text.
+const eventKey = (e: { at: number; message: string }) => `${e.at}|${e.message}`;
+let lastEvent: string | undefined;
+function echoEvents(events: typeof store.state.events): void {
+  const fresh: typeof events = [];
+  for (const e of events) {
+    if (eventKey(e) === lastEvent) break;
+    fresh.push(e);
+  }
+  if (events[0]) lastEvent = eventKey(events[0]);
+  for (const e of fresh.reverse()) {
+    if (e.level !== "info") console.error(`[${new Date(e.at).toLocaleTimeString()}] ${e.level.toUpperCase()}: ${e.message}`);
+  }
+}
+echoEvents(store.state.events);
+store.subscribe((s) => echoEvents(s.events));
 
 let stopping = false;
 async function shutdown() {

@@ -82,11 +82,30 @@ class Waiter {
   }
 }
 
-const CRASHED: AgentError = {
-  code: "engine-crashed",
-  message: "Deskflow stopped unexpectedly",
-  hint: "Input is back on the Gaming PC. Try switching again.",
-};
+export function logFile(p: DeskflowPaths, mode: "server" | "client"): string {
+  return join(p.dir, `deskflow-${mode}.log`);
+}
+
+/** The line most likely to say why Deskflow stopped: its last error or warning, else its last line. */
+export function lastError(tail: string[]): string | undefined {
+  const line = tail.findLast((l) => /\b(FATAL|ERROR|WARNING)\b/.test(l)) ?? tail.at(-1);
+  return line?.slice(0, 300);
+}
+
+function exitText(code: number | null): string {
+  if (code === null) return "ended from outside";
+  // Windows crash codes are NTSTATUS values such as 0xC0000005; they read better in hex.
+  return code > 0xffff || code < 0 ? `exit code 0x${(code >>> 0).toString(16).toUpperCase()}` : `exit code ${code}`;
+}
+
+export function crashed(code: number | null, tail: string[], log: string): AgentError {
+  const why = lastError(tail);
+  return {
+    code: "engine-crashed",
+    message: `Deskflow stopped unexpectedly (${exitText(code)})${why ? `. Last output: ${why}` : ""}`,
+    hint: `Input is back on the Gaming PC. Deskflow's full output is in ${log}`,
+  };
+}
 
 export interface PeerControl {
   request(req: { op: "input.prepare" } | { op: "input.release" }): Promise<void>;
@@ -141,8 +160,9 @@ export class DeskflowServerInput implements InputEngine {
     this.#proc = new CoreProcess({
       exe: this.#p.exe,
       args: [...(this.#p.exePrefixArgs ?? []), "server", "-s", settings],
+      logFile: logFile(this.#p, "server"),
       onLine: (l) => this.#line(l),
-      onExit: () => this.#exited(),
+      onExit: (code, tail) => this.#exited(code, tail),
     });
     await this.#proc.start();
     if (gen !== this.#gen) {
@@ -196,11 +216,12 @@ export class DeskflowServerInput implements InputEngine {
     }
   }
 
-  #exited(): void {
+  #exited(code: number | null, tail: string[]): void {
     this.#proc = null;
     const unexpected = !this.#stopping;
-    this.#report({ target: "gaming-pc", engine: "stopped", hooksActive: false, clientConnected: false }, unexpected ? CRASHED : undefined);
-    const err = new EngineError(CRASHED);
+    const error = crashed(code, tail, logFile(this.#p, "server"));
+    this.#report({ target: "gaming-pc", engine: "stopped", hooksActive: false, clientConnected: false }, unexpected ? error : undefined);
+    const err = new EngineError(error);
     this.#connected.fail(err);
     this.#onLaptop.fail(err);
   }
@@ -245,13 +266,14 @@ export class DeskflowClient {
     this.#proc = new CoreProcess({
       exe: this.#p.exe,
       args: [...(this.#p.exePrefixArgs ?? []), "client", "-s", settings],
+      logFile: logFile(this.#p, "client"),
       onLine: (l) => {
         if (RE_DISCONNECTED_FROM_SERVER.test(l)) this.#set({ connected: false, entered: false });
         else if (RE_CONNECTED_TO_SERVER.test(l)) this.#set({ connected: true });
       },
-      onExit: () => {
+      onExit: (code, tail) => {
         this.#proc = null;
-        this.#set({ engine: "stopped", connected: false, entered: false }, this.#stopping ? undefined : CRASHED);
+        this.#set({ engine: "stopped", connected: false, entered: false }, this.#stopping ? undefined : crashed(code, tail, logFile(this.#p, "client")));
       },
     });
     try {

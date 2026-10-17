@@ -1,21 +1,30 @@
 // Starts and stops one deskflow-core process. Output lines are parsed in
-// memory and never written to disk.
+// memory and, when a log file is given, copied there so a failed run can be
+// looked at afterwards. Deskflow runs at Debug level, which never logs
+// keystrokes (those only appear at Verbose).
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { createWriteStream, type WriteStream } from "node:fs";
 import { EngineError } from "../engines.ts";
+
+const TAIL_LINES = 20;
 
 export interface CoreProcessOptions {
   exe: string;
   args: string[];
+  /** Overwritten on each start with everything Deskflow prints. */
+  logFile?: string;
   onLine(line: string): void;
-  /** Called when the process exits for any reason, including stop(). */
-  onExit(code: number | null): void;
+  /** Called when the process exits for any reason, including stop(), with the last lines it printed. */
+  onExit(code: number | null, tail: string[]): void;
 }
 
 export class CoreProcess {
   #o: CoreProcessOptions;
   #child: ChildProcess | null = null;
   #exited: Promise<void> = Promise.resolve();
+  #tail: string[] = [];
+  #log: WriteStream | null = null;
 
   constructor(o: CoreProcessOptions) {
     this.#o = o;
@@ -27,14 +36,26 @@ export class CoreProcess {
 
   start(): Promise<void> {
     if (this.#child) return Promise.resolve();
+    this.#tail = [];
+    this.#log?.end();
+    this.#log = null;
+    if (this.#o.logFile) {
+      const log = createWriteStream(this.#o.logFile, { flags: "w" });
+      log.on("error", () => {
+        if (this.#log === log) this.#log = null;
+      });
+      log.write(`# ${[this.#o.exe, ...this.#o.args].join(" ")}\r\n# started ${new Date().toISOString()}\r\n`);
+      this.#log = log;
+    }
     return new Promise<void>((resolve, reject) => {
       const child = spawn(this.#o.exe, this.#o.args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
       let spawned = false;
       this.#exited = new Promise<void>((done) => {
-        child.once("exit", (code) => {
+        child.once("exit", (code, signal) => {
           if (this.#child === child) this.#child = null;
+          this.#endLog(`exited ${new Date().toISOString()} with ${code === null ? `signal ${signal}` : `code ${code}`}`);
           done();
-          if (spawned) this.#o.onExit(code);
+          if (spawned) this.#o.onExit(code, [...this.#tail]);
         });
       });
       child.once("spawn", () => {
@@ -44,6 +65,7 @@ export class CoreProcess {
       });
       child.once("error", (e: NodeJS.ErrnoException) => {
         if (spawned) return;
+        this.#endLog(`could not start: ${e.message}`);
         reject(
           new EngineError(
             e.code === "ENOENT"
@@ -59,10 +81,22 @@ export class CoreProcess {
           const parts = (rest + chunk).split(/\r?\n/);
           rest = parts.pop() ?? "";
           if (rest.length > 8192) rest = "";
-          for (const line of parts) if (line) this.#o.onLine(line);
+          for (const line of parts) if (line) this.#line(line);
         });
       }
     });
+  }
+
+  #line(line: string): void {
+    this.#tail.push(line);
+    if (this.#tail.length > TAIL_LINES) this.#tail.shift();
+    this.#log?.write(line + "\r\n");
+    this.#o.onLine(line);
+  }
+
+  #endLog(note: string): void {
+    this.#log?.end(`# ${note}\r\n`);
+    this.#log = null;
   }
 
   /** Ends the process tree and resolves once it has exited. */
