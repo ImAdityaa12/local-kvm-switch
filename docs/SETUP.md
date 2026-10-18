@@ -32,8 +32,8 @@ Follow the parts in order. Parts 1–3 are done once; Part 4 is what you do each
    2. Right-click `VBCABLE_Setup_x64.exe` → **Run as administrator** → **Install Driver**.
    3. **Reboot.**
    4. Settings → System → Sound → **Output**: choose your speakers or headphones again (the installer
-      may have switched it to "CABLE Input"; leaving it there mutes the laptop and blocks the
-      laptop-audio route).
+      may have switched it to "CABLE Input" or "CABLE In 16ch"; leaving it there mutes the laptop,
+      blocks the laptop-audio route and stops the microphone from starting).
 
 ---
 
@@ -194,7 +194,7 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 | Clicking **Laptop** never reaches *Press Ctrl+Alt+Left* (or Ctrl+Alt+Left does nothing), and the laptop's log says *Local input confirmed…* right after the switch starts | The laptop is running an older version that stopped its own Deskflow straight away. Update the laptop (`git pull`, Part 2) and restart the laptop agent. |
 | Laptop shows **Unreachable** | Same network? Correct `--bind` address on the gaming PC? Allowed Node.js through the firewall for **Private** networks? Network set to **Private**, not Public, in Windows settings? |
 | Pairing: "Could not reach …" | Open pairing on the gaming PC first; it stays open for two minutes. Check the address. |
-| "The laptop's default playback device is the virtual cable" | On the laptop: Settings → System → Sound → Output → your speakers or headphones. |
+| "The laptop's sound output is "CABLE …", part of the virtual cable", or the microphone fails with *0x8889000A* | On the laptop: Settings → System → Sound → Output → your speakers or headphones. Sound sent to "CABLE In 16ch" keeps the microphone from opening "CABLE Input". |
 | "The laptop has no virtual microphone" | Install VB-CABLE on the laptop (Part 1, step 5), reboot, restart the laptop agent. |
 | "The audio helper is not built" | Put `kvm-audio.exe` in `native\kvm-audio\target\release\` (Part 2), restart the agent. |
 | Dashboard says **No agent** | The agent window was closed. Start it again and open the new link. |

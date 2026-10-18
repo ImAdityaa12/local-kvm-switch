@@ -8,6 +8,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isCablePlayback } from "../src/audio/engine.ts";
 import { HelperProcess, helperPath } from "../src/audio/helper.ts";
 
 const exe = helperPath(fileURLToPath(new URL("../..", import.meta.url)));
@@ -169,4 +170,11 @@ test("player gives up when no sender appears", { skip }, async () => {
   const err = await waitFor(play, "error", 15_000);
   assert.equal(err.code, "peer-unreachable");
   await play.exited;
+});
+
+test("every input of the virtual cable counts as the cable, nothing else does", () => {
+  assert.equal(isCablePlayback("CABLE Input (VB-Audio Virtual Cable)"), true);
+  assert.equal(isCablePlayback("CABLE In 16ch (VB-Audio Virtual Cable)"), true);
+  assert.equal(isCablePlayback("CABLE Output (VB-Audio Virtual Cable)"), false);
+  assert.equal(isCablePlayback("Speakers (Realtek(R) Audio)"), false);
 });
