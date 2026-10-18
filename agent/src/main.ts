@@ -342,7 +342,7 @@ async function buildReal(): Promise<Built> {
 
   store.log("info", `Agent started as the ${machine === "gaming-pc" ? "gaming PC" : "laptop"}.`);
   // Say early what would make switching fail later.
-  await preflight(paths.exe).catch((e) => {
+  await preflight(paths.exe, [], (m) => store.log("info", m)).catch((e) => {
     if (e instanceof EngineError) store.log("warn", `${e.detail.message} ${e.detail.hint ?? ""}`.trim());
   });
   return {

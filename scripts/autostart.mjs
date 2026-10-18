@@ -6,6 +6,7 @@
 //   node scripts/autostart.mjs install --machine laptop
 //   node scripts/autostart.mjs stop        stop the background agent until the next sign-in
 //   node scripts/autostart.mjs remove      stop it and undo install
+//   node scripts/autostart.mjs disable-deskflow   turn off the Deskflow service (install does this too)
 //
 // The agent restarts on its own if it stops (for example when the network is
 // not up yet right after sign-in). Its console output goes to agent.log in
@@ -105,6 +106,54 @@ function stopAgent() {
   spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], { stdio: "inherit" });
 }
 
+/** Whether the Deskflow service is stopped and whether it starts with Windows; null when it is not installed. */
+function deskflowService() {
+  const config = spawnSync("sc.exe", ["qc", "Deskflow"], { encoding: "utf8" });
+  if (config.status !== 0) return null;
+  const state = spawnSync("sc.exe", ["query", "Deskflow"], { encoding: "utf8" });
+  return { disabled: /START_TYPE\s*:\s*4\b/.test(config.stdout), stopped: /STATE\s*:\s*1\b/.test(state.stdout) };
+}
+
+/**
+ * The Deskflow service starts its own Deskflow with Windows, which blocks the
+ * agent. It runs as SYSTEM, so turning it off needs admin: Windows asks once.
+ * Deskflows the agent started (their parent is node.exe) are left alone.
+ */
+function disableDeskflowService() {
+  const before = deskflowService();
+  if (!before || (before.disabled && before.stopped)) return true;
+  console.log("The Deskflow service starts its own Deskflow with Windows, which blocks the agent.");
+  console.log("Turning it off. Windows asks for permission once; click Yes…");
+  const elevated = [
+    "Stop-Service Deskflow -Force -ErrorAction SilentlyContinue",
+    "Set-Service Deskflow -StartupType Disabled",
+    "foreach ($p in Get-CimInstance Win32_Process -Filter \"Name='deskflow-core.exe'\") {",
+    "  $parent = Get-CimInstance Win32_Process -Filter \"ProcessId=$($p.ParentProcessId)\"",
+    "  if (-not $parent -or $parent.Name -ne 'node.exe') { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }",
+    "}",
+    "Stop-Process -Name deskflow -Force -ErrorAction SilentlyContinue",
+  ].join("\n");
+  const encoded = Buffer.from(elevated, "utf16le").toString("base64");
+  spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `try { Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','${encoded}' } catch { exit 1 }`,
+    ],
+    { stdio: "inherit" },
+  );
+  const after = deskflowService();
+  if (after && after.disabled && after.stopped) {
+    console.log("The Deskflow service is off and will not start with Windows again.");
+    return true;
+  }
+  console.warn("The Deskflow service is still on (was the permission prompt declined?). Run this again, or in services.msc");
+  console.warn("stop Deskflow and set its Startup type to Disabled. Until then switching fails after each restart.");
+  return false;
+}
+
 function install() {
   const machine = values.machine;
   if (machine !== "gaming-pc" && machine !== "laptop") fail("Pass --machine gaming-pc or --machine laptop.");
@@ -118,6 +167,8 @@ function install() {
     const r = spawnSync(process.execPath, [join(repo, "node_modules", "next", "dist", "bin", "next"), "build"], { cwd: repo, stdio: "inherit" });
     if (r.status !== 0) fail("The dashboard build failed. Run npm install, then try again.");
   }
+
+  disableDeskflowService();
 
   mkdirSync(dataDir, { recursive: true });
   const node = plain(process.execPath, "The Node.js path");
@@ -190,6 +241,10 @@ else if (command === "stop") {
   stopAgent();
   for (const f of [startupFile, desktopLink, startMenuLink, runner, opener]) rmSync(f, { force: true });
   console.log("Removed: the agent no longer starts at sign-in, and the shortcuts are gone.");
+} else if (command === "disable-deskflow") {
+  if (!deskflowService()) console.log("The Deskflow service is not installed on this machine; nothing to do.");
+  else if (!disableDeskflowService()) process.exit(1);
+  else console.log("Nothing else to do: the agent starts Deskflow itself.");
 } else {
-  fail("Usage: node scripts/autostart.mjs install --machine gaming-pc|laptop [--bind IP] | stop | remove");
+  fail("Usage: node scripts/autostart.mjs install --machine gaming-pc|laptop [--bind IP] | stop | remove | disable-deskflow");
 }

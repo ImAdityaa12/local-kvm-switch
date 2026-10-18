@@ -2,7 +2,9 @@
 
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { EngineError } from "../engines.ts";
+import { remoteLog } from "../remote-log.ts";
 
 /** Process ids of every running deskflow-core.exe. */
 export function runningCores(): Promise<number[]> {
@@ -34,6 +36,13 @@ function parentNames(pids: number[]): Promise<string[]> {
   });
 }
 
+/** Ends the Deskflow app and the deskflow-core it started. It runs as you, so this needs no admin. */
+function closeDeskflowApp(): Promise<void> {
+  return new Promise((resolve) => {
+    execFile("taskkill", ["/IM", "deskflow.exe", "/T", "/F"], { windowsHide: true }, () => resolve());
+  });
+}
+
 /** What to say about a deskflow-core.exe we did not start, from what started it. */
 export function conflictDetail(parents: string[]): { message: string; hint: string } {
   if (parents.includes("deskflow.exe")) {
@@ -45,7 +54,7 @@ export function conflictDetail(parents: string[]): { message: string; hint: stri
   if (parents.includes("deskflow-daemon.exe") || parents.includes("services.exe")) {
     return {
       message: "The Deskflow service is already running Deskflow.",
-      hint: "In services.msc, stop the Deskflow service and set its Startup type to Disabled (needs admin). The agent starts Deskflow itself.",
+      hint: "Run npm.cmd run autostart -- disable-deskflow once in the project folder (Windows asks for admin), or in services.msc stop the Deskflow service and set its Startup type to Disabled. The agent starts Deskflow itself.",
     };
   }
   if (parents.includes("node.exe")) {
@@ -56,16 +65,22 @@ export function conflictDetail(parents: string[]): { message: string; hint: stri
   }
   return {
     message: "Deskflow is already running, started by something else.",
-    hint: "Quit the Deskflow app from its tray icon and stop the Deskflow service in services.msc. If neither is running, end deskflow-core.exe in Task Manager.",
+    hint: "Run npm.cmd run autostart -- disable-deskflow once in the project folder (Windows asks for admin). If that does not help, end deskflow-core.exe in Task Manager.",
   };
 }
 
 /**
  * Deskflow must be installed where we look, and nothing else may be running it:
  * the Deskflow app and its service start their own deskflow-core, which takes
- * the single-instance slot and has its own settings.
+ * the single-instance slot and has its own settings. The app is closed here;
+ * the service runs as SYSTEM, so only autostart's disable-deskflow (admin) can
+ * turn it off.
  */
-export async function preflight(exe: string, ours: number[] = []): Promise<void> {
+export async function preflight(
+  exe: string,
+  ours: number[] = [],
+  note: (message: string) => void = (m) => remoteLog.write("deskflow", "info", m),
+): Promise<void> {
   if (!existsSync(exe)) {
     throw new EngineError({
       code: "engine-missing",
@@ -73,8 +88,19 @@ export async function preflight(exe: string, ours: number[] = []): Promise<void>
       hint: "Install Deskflow 1.27.0 (deskflow-1.27.0-win-x64.msi), or start the agent with --deskflow and the full path to deskflow-core.exe.",
     });
   }
-  const others = (await runningCores()).filter((p) => !ours.includes(p));
-  if (others.length > 0) {
-    throw new EngineError({ code: "engine-crashed", ...conflictDetail(await parentNames(others)) });
+  const others = async () => (await runningCores()).filter((p) => !ours.includes(p));
+  let held = await others();
+  if (held.length === 0) return;
+  let parents = await parentNames(held);
+  if (parents.includes("deskflow.exe")) {
+    await closeDeskflowApp();
+    await delay(500);
+    held = await others();
+    if (held.length === 0) {
+      note("Closed the Deskflow app, which was holding Deskflow. The agent starts Deskflow itself.");
+      return;
+    }
+    parents = await parentNames(held);
   }
+  throw new EngineError({ code: "engine-crashed", ...conflictDetail(parents) });
 }
