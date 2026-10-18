@@ -12,6 +12,9 @@ import {
 const STORAGE_KEY = "lan-kvm.agent";
 const DEFAULT_AGENT_URL = "ws://127.0.0.1:47820/control";
 const ACK_TIMEOUT_MS = 20_000;
+// A switch to the laptop is answered only once the cursor is there, and the
+// agent waits up to 60 s for the hotkey (DeskflowServerInput.switchTimeoutMs).
+const SWITCH_ACK_TIMEOUT_MS = 75_000;
 
 export type ConnectionStatus =
   | "starting"
@@ -155,7 +158,7 @@ export function useAgent() {
         if (pending.current.delete(id)) {
           resolve({ ok: false, error: { code: "engine-timeout", message: "The agent did not answer in time." } });
         }
-      }, ACK_TIMEOUT_MS);
+      }, command.type === "input.setTarget" ? SWITCH_ACK_TIMEOUT_MS : ACK_TIMEOUT_MS);
     });
     setLastError(ack.ok ? null : ack.error);
     return ack;
