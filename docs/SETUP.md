@@ -191,6 +191,22 @@ When asking for help, send from the machine that shows the error:
 A *"Deskflow stopped unexpectedly (exit code …)"* error includes Deskflow's last error line, which
 usually says what went wrong.
 
+### Sending logs to a database (optional)
+
+With a log database set, both agents send everything they log (agent events, Deskflow's output,
+audio helper crashes) to one Postgres database, so problems on either machine can be read from one
+place. Set it once per machine, either way:
+
+- Put `DATABASE_URL=postgresql://…` in a `.env` file in the project folder. Git ignores `.env`, so
+  `git pull` does not bring it to the other machine; create it there too.
+- Or run the agent once with `--log-db "postgresql://…"`. It is saved in
+  `%LOCALAPPDATA%\LanKvmSwitcher\log-database-url`.
+
+After that, start the agent as usual. The agent window says *"Logs are also sent to the log
+database"*. To read them: `node scripts\logs.mjs --since 2h --level warn` (also `--machine laptop`,
+`--source deskflow`, `--grep text`, `--runs`). If the network drops, logs wait in memory and are sent
+when it is back. Like the Deskflow log file, nothing sent contains keystrokes or the dashboard token.
+
 ---
 
 ## Building the audio helper (only if `kvm-audio.exe` is missing)

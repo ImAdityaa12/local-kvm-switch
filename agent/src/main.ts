@@ -4,6 +4,9 @@
 //   node agent/src/main.ts --machine gaming-pc [--bind IP] real: Deskflow server + peer link
 //   node agent/src/main.ts --machine laptop               real: Deskflow client + peer link
 //
+//   --log-db postgresql://...   also send logs to this database (saved, so pass it once per machine;
+//                               DATABASE_URL in the project's .env works too)
+//
 // Audio is not built yet (Phase 2); real mode reports it as unavailable.
 
 import { randomBytes } from "node:crypto";
@@ -26,6 +29,7 @@ import { PairingManager } from "./peer/manager.ts";
 import { TrustStore } from "./peer/trust.ts";
 import { CONTROL_PATH, startControlServer } from "./server.ts";
 import { Store } from "./store.ts";
+import { logDatabaseUrl, remoteLog, saveLogDatabaseUrl } from "./remote-log.ts";
 import { dataDir, loadOrCreateToken } from "./token.ts";
 import { SimAudio, SimInput, SimPairing, SimWorld } from "./sim/world.ts";
 
@@ -44,6 +48,7 @@ const { values } = parseArgs({
     origin: { type: "string", multiple: true, default: [] },
     unpaired: { type: "boolean", default: false },
     "no-endpoint": { type: "boolean", default: false },
+    "log-db": { type: "string" },
   },
 });
 
@@ -75,6 +80,28 @@ function idleRoute() {
 
 const dir = dataDir();
 const name = hostname();
+
+try {
+  process.loadEnvFile(fileURLToPath(new URL("../../.env", import.meta.url)));
+} catch {
+  // no .env; that is fine
+}
+
+if (values["log-db"]) {
+  try {
+    saveLogDatabaseUrl(dir, values["log-db"]);
+  } catch (e) {
+    die((e as Error).message);
+  }
+}
+const logDb = values.simulate ? null : logDatabaseUrl(dir);
+if (logDb) remoteLog.start(logDb, { machine, host: name, version: VERSION });
+
+process.on("uncaughtException", (e) => {
+  console.error(e);
+  remoteLog.write("crash", "error", `Agent crashed: ${e?.stack ?? String(e)}`);
+  void remoteLog.stop().finally(() => process.exit(1));
+});
 const notifyToken = randomBytes(32).toString("base64url");
 let cursorHandler: (e: CursorEvent) => void = () => {};
 
@@ -361,8 +388,10 @@ console.log(`LAN KVM agent ${VERSION} (${role}) listening on 127.0.0.1:${port}`)
 if (!values.simulate && machine === "gaming-pc") console.log(`Peer link on ${store.state.agent.lanAddress}:${LINK_PORT} (pairing opens ${store.state.agent.lanAddress}:47822 on request)`);
 console.log(`Open the dashboard with this link (the token stays in the URL fragment, never sent to a server):\n\n  ${link}\n`);
 if (!values.simulate) console.log(`Deskflow's output from its last run is saved in ${join(dir, "deskflow")} (deskflow-server.log or deskflow-client.log).\n`);
+if (!values.simulate) console.log(remoteLog.enabled ? "Logs are also sent to the log database.\n" : "Logs stay on this machine (pass --log-db once to also send them to a log database).\n");
 
-// Warnings and errors also go to this window, so they can be copied as text.
+// Warnings and errors also go to this window, so they can be copied as text,
+// and every event goes to the log database when one is set.
 const eventKey = (e: { at: number; message: string }) => `${e.at}|${e.message}`;
 let lastEvent: string | undefined;
 function echoEvents(events: typeof store.state.events): void {
@@ -373,6 +402,7 @@ function echoEvents(events: typeof store.state.events): void {
   }
   if (events[0]) lastEvent = eventKey(events[0]);
   for (const e of fresh.reverse()) {
+    remoteLog.write("agent", e.level, e.message);
     if (e.level !== "info") console.error(`[${new Date(e.at).toLocaleTimeString()}] ${e.level.toUpperCase()}: ${e.message}`);
   }
 }
@@ -386,6 +416,7 @@ async function shutdown() {
   console.log("Stopping: returning input to this PC and releasing resources…");
   await controller.shutdown().catch(() => {});
   await built.dispose().catch(() => {});
+  await remoteLog.stop();
   process.exit(0);
 }
 process.on("SIGINT", shutdown);

@@ -6,8 +6,17 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { EngineError } from "../engines.ts";
+import { remoteLog, type LogLevel } from "../remote-log.ts";
 
 const TAIL_LINES = 20;
+
+function lineLevel(line: string): LogLevel {
+  const m = /\b(FATAL|ERROR|WARNING|NOTE|INFO|DEBUG\d?)\b/.exec(line);
+  if (!m) return "info";
+  if (m[1] === "FATAL" || m[1] === "ERROR") return "error";
+  if (m[1] === "WARNING") return "warn";
+  return m[1].startsWith("DEBUG") ? "debug" : "info";
+}
 
 export interface CoreProcessOptions {
   exe: string;
@@ -47,6 +56,7 @@ export class CoreProcess {
       log.write(`# ${[this.#o.exe, ...this.#o.args].join(" ")}\r\n# started ${new Date().toISOString()}\r\n`);
       this.#log = log;
     }
+    remoteLog.write("deskflow", "info", `started: ${this.#o.args.join(" ")}`);
     return new Promise<void>((resolve, reject) => {
       const child = spawn(this.#o.exe, this.#o.args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
       let spawned = false;
@@ -91,10 +101,12 @@ export class CoreProcess {
     this.#tail.push(line);
     if (this.#tail.length > TAIL_LINES) this.#tail.shift();
     this.#log?.write(line + "\r\n");
+    remoteLog.write("deskflow", lineLevel(line), line);
     this.#o.onLine(line);
   }
 
   #endLog(note: string): void {
+    remoteLog.write("deskflow", /code 0$/.test(note) ? "info" : "warn", note);
     this.#log?.end(`# ${note}\r\n`);
     this.#log = null;
   }

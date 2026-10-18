@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import type { AudioDevice, AudioFormat } from "../../../lib/protocol/index.ts";
 import { EngineError } from "../engines.ts";
+import { remoteLog } from "../remote-log.ts";
 
 export function helperPath(repoRoot: string): string {
   return join(repoRoot, "native", "kvm-audio", "target", "release", "kvm-audio.exe");
@@ -39,7 +40,9 @@ export class HelperProcess {
         for (const h of this.#handlers.get("*") ?? []) h(e);
       }
     });
-    child.stderr?.resume();
+    // The helper only writes to stderr when it panics.
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => remoteLog.write("audio", "error", chunk.trimEnd()));
   }
 
   static spawn(exe: string, args: string[]): HelperProcess {

@@ -13,6 +13,7 @@ import {
 import { EngineError } from "./engines.ts";
 import type { Controller } from "./controller.ts";
 import { makeRateLimiter } from "./rate-limit.ts";
+import { remoteLog } from "./remote-log.ts";
 
 export { makeRateLimiter };
 import type { Store } from "./store.ts";
@@ -147,7 +148,10 @@ function serve(ws: WebSocket, opts: ServerOptions): void {
     } catch (e) {
       const error =
         e instanceof EngineError ? e.detail : { code: "internal" as const, message: "Unexpected agent error" };
-      if (!(e instanceof EngineError)) console.error("[agent] command failed", e);
+      if (!(e instanceof EngineError)) {
+        console.error("[agent] command failed", e);
+        remoteLog.write("crash", "error", `Command ${msg.command.type} failed: ${(e as Error)?.stack ?? String(e)}`);
+      }
       send({ type: "ack", id: msg.id, ok: false, error });
     }
   });
