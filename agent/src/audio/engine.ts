@@ -40,12 +40,14 @@ export function isCablePlayback(name: string): boolean {
 }
 
 /**
- * VB-CABLE A+B: separate cables ("CABLE-A Input", "CABLE-B Input"). Laptop sound
- * set to one of them reaches the IEM without the laptop's speakers playing it,
- * and leaves the mic's cable alone.
+ * A virtual output other than the mic's cable: Voicemeeter's "Voicemeeter Input"
+ * (free; the Voicemeeter app must not be running, or it plays the sound on
+ * the speakers) or VB-CABLE A+B's "CABLE-A Input". Laptop sound set to one of
+ * them reaches the IEM without the laptop's speakers playing it, and leaves
+ * the mic's cable alone.
  */
 export function isSecondCable(name: string): boolean {
-  return /^CABLE-[AB] In(put\b|\s)/i.test(name);
+  return /^Voicemeeter\b.*\bIn(put\b|\s)/i.test(name) || /^CABLE-[AB] In(put\b|\s)/i.test(name);
 }
 
 /** The laptop's output is the mic's cable: say what to choose instead. */
@@ -56,7 +58,7 @@ export function cableIsDefaultError(name: string, what: string, playback: { name
     message: `The laptop's sound output is "${name}", the microphone's cable. ${what}`,
     hint: second
       ? `On the laptop: Settings → System → Sound → Output → "${second.name}". Laptop sound then goes only to your IEM.`
-      : "To hear laptop sound only in your IEM, install VB-CABLE A+B on the laptop and set Sound → Output to \"CABLE-A Input\". Or choose your speakers or headphones.",
+      : "To hear laptop sound only in your IEM, install Voicemeeter (free, vb-audio.com/Voicemeeter) on the laptop and set Sound → Output to \"Voicemeeter Input\". Or choose your speakers or headphones.",
   });
 }
 

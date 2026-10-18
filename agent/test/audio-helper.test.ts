@@ -196,7 +196,13 @@ test("the mic route fails cleanly when the laptop refuses it", { skip }, async (
   assert.deepEqual(unhandled, []);
 });
 
-test("the second cable (VB-CABLE A+B) is a fine laptop output, and the error points to it", () => {
+test("a second virtual output (Voicemeeter, VB-CABLE A+B) is a fine laptop output, and the error points to it", () => {
+  assert.equal(isSecondCable("Voicemeeter Input (VB-Audio Voicemeeter VAIO)"), true);
+  assert.equal(isSecondCable("Voicemeeter AUX Input (VB-Audio Voicemeeter AUX VAIO)"), true);
+  assert.equal(isSecondCable("Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)"), false);
+  assert.equal(isCablePlayback("Voicemeeter Input (VB-Audio Voicemeeter VAIO)"), false);
+  const withVm = cableIsDefaultError("CABLE In 16ch (VB-Audio Virtual Cable)", "", [{ name: "Voicemeeter Input (VB-Audio Voicemeeter VAIO)" }]);
+  assert.match(withVm.detail.hint ?? "", /"Voicemeeter Input \(VB-Audio Voicemeeter VAIO\)"/);
   assert.equal(isSecondCable("CABLE-A Input (VB-Audio Cable A)"), true);
   assert.equal(isSecondCable("CABLE-B In 16ch (VB-Audio Cable B)"), true);
   assert.equal(isCablePlayback("CABLE-A Input (VB-Audio Cable A)"), false);
@@ -204,5 +210,5 @@ test("the second cable (VB-CABLE A+B) is a fine laptop output, and the error poi
   const withA = cableIsDefaultError("CABLE In 16ch (VB-Audio Virtual Cable)", "", [{ name: "CABLE-A Input (VB-Audio Cable A)" }]);
   assert.match(withA.detail.hint ?? "", /"CABLE-A Input \(VB-Audio Cable A\)"/);
   const without = cableIsDefaultError("CABLE In 16ch (VB-Audio Virtual Cable)", "", [{ name: "Speakers (Realtek(R) Audio)" }]);
-  assert.match(without.detail.hint ?? "", /install VB-CABLE A\+B/);
+  assert.match(without.detail.hint ?? "", /install Voicemeeter/);
 });
