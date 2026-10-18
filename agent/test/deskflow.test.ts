@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commandLine, iniString, serverLayout, settingsIni } from "../src/deskflow/config.ts";
+import { conflictDetail } from "../src/deskflow/preflight.ts";
 import { DeskflowServerInput, crashed, lastError, type DeskflowPaths } from "../src/deskflow/engines.ts";
 import type { InputReport } from "../src/engines.ts";
 
@@ -131,4 +132,12 @@ test("server engine: a missing Deskflow install is a clear error", async () => {
   const e = new DeskflowServerInput({ ...paths(), exe: "C:/nope/deskflow-core.exe", exePrefixArgs: [] }, { request: async () => {} });
   e.onReport(() => {});
   await assert.rejects(e.activateRemote(), /Deskflow was not found/);
+});
+
+test("a Deskflow we did not start is named by what started it", () => {
+  assert.match(conflictDetail(["deskflow.exe"]).message, /Deskflow app/);
+  assert.match(conflictDetail(["deskflow.exe"]).hint, /Startup apps/);
+  assert.match(conflictDetail(["deskflow-daemon.exe"]).message, /Deskflow service/);
+  assert.match(conflictDetail(["node.exe"]).message, /Another LAN KVM agent/);
+  assert.match(conflictDetail([""]).hint, /Task Manager/);
 });

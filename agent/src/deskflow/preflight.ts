@@ -20,6 +20,46 @@ export function runningCores(): Promise<number[]> {
   });
 }
 
+/** Name of the process that started each pid ("" when that process is gone). */
+function parentNames(pids: number[]): Promise<string[]> {
+  if (process.platform !== "win32" || pids.length === 0) return Promise.resolve([]);
+  const ps =
+    `foreach ($id in @(${pids.join(",")})) { $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id"; ` +
+    `$q = if ($p) { Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)" }; if ($q) { $q.Name } else { '-' } }`;
+  return new Promise((resolve) => {
+    execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], { windowsHide: true, timeout: 10_000 }, (err, out) => {
+      if (err) return resolve([]);
+      resolve(out.split(/\r?\n/).map((l) => l.trim().toLowerCase()).filter(Boolean).map((l) => (l === "-" ? "" : l)));
+    });
+  });
+}
+
+/** What to say about a deskflow-core.exe we did not start, from what started it. */
+export function conflictDetail(parents: string[]): { message: string; hint: string } {
+  if (parents.includes("deskflow.exe")) {
+    return {
+      message: "The Deskflow app is already running Deskflow.",
+      hint: "Right-click the Deskflow tray icon → Quit. To stop it coming back after a restart: Task Manager → Startup apps → Deskflow → Disable. The agent starts Deskflow itself.",
+    };
+  }
+  if (parents.includes("deskflow-daemon.exe") || parents.includes("services.exe")) {
+    return {
+      message: "The Deskflow service is already running Deskflow.",
+      hint: "In services.msc, stop the Deskflow service and set its Startup type to Disabled (needs admin). The agent starts Deskflow itself.",
+    };
+  }
+  if (parents.includes("node.exe")) {
+    return {
+      message: "Another LAN KVM agent is already running Deskflow.",
+      hint: "Only one agent may run. Close the agent in your terminal (Ctrl+C), or run npm run autostart -- stop.",
+    };
+  }
+  return {
+    message: "Deskflow is already running, started by something else.",
+    hint: "Quit the Deskflow app from its tray icon and stop the Deskflow service in services.msc. If neither is running, end deskflow-core.exe in Task Manager.",
+  };
+}
+
 /**
  * Deskflow must be installed where we look, and nothing else may be running it:
  * the Deskflow app and its service start their own deskflow-core, which takes
@@ -35,10 +75,6 @@ export async function preflight(exe: string, ours: number[] = []): Promise<void>
   }
   const others = (await runningCores()).filter((p) => !ours.includes(p));
   if (others.length > 0) {
-    throw new EngineError({
-      code: "engine-crashed",
-      message: "The Deskflow app or its service is already running Deskflow.",
-      hint: "Quit Deskflow from its tray icon, and in services.msc stop the Deskflow service and set it to Disabled. The agent starts Deskflow itself.",
-    });
+    throw new EngineError({ code: "engine-crashed", ...conflictDetail(await parentNames(others)) });
   }
 }
