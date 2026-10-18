@@ -49,7 +49,7 @@ export class SimWorld implements Simulation {
 
 export class SimInput implements InputEngine {
   readonly kind = "simulated" as const;
-  readonly hotkeys = { toLaptop: "Ctrl+Alt+Right", toGamingPc: "Ctrl+Alt+Left" };
+  readonly hotkeys = { toLaptop: "Ctrl+Alt+Left", toGamingPc: "Ctrl+Alt+Right" };
   #world: SimWorld;
   #cb: (r: InputReport, e?: AgentError) => void = () => {};
   #running = false;

@@ -25,7 +25,8 @@ while the cursor is on the server.
 - ~~TLS on, fingerprint pinning on both sides.~~ Revised 2026-10-17: Deskflow listens on loopback
   with its TLS off, and the laptop reaches it only through a tunnel inside our PSK-authenticated peer
   link (ADR 0003). One trust mechanism instead of two, and no Deskflow port on the network.
-- Hotkeys: Ctrl+Alt+Right to the laptop, Ctrl+Alt+Left back. When the cursor comes back by hotkey or
+- Hotkeys: Ctrl+Alt+Left to the laptop, Ctrl+Alt+Right back (the laptop sits to the left of the
+  gaming PC; the screen edges follow the same layout). When the cursor comes back by hotkey or
   edge, the agent stops the server, so Gaming PC mode again has no Deskflow process.
 
 ## Consequences

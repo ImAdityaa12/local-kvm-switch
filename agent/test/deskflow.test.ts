@@ -46,8 +46,11 @@ test("server settings keep Deskflow on loopback, TLS off (tunnelled), enter/exit
 
 test("layout binds the switch hotkeys", () => {
   const l = serverLayout();
-  assert.match(l, /keystroke\(control\+alt\+Right\) = switchToScreen\(laptop\)/);
-  assert.match(l, /keystroke\(control\+alt\+Left\) = switchToScreen\(gaming-pc\)/);
+  assert.match(l, /keystroke\(control\+alt\+Left\) = switchToScreen\(laptop\)/);
+  assert.match(l, /keystroke\(control\+alt\+Right\) = switchToScreen\(gaming-pc\)/);
+  // The laptop is to the left of the gaming PC.
+  assert.match(l, /\tgaming-pc:\r\n\t\tleft = laptop/);
+  assert.match(l, /\tlaptop:\r\n\t\tright = gaming-pc/);
   assert.doesNotMatch(l, /section: screens/);
 });
 

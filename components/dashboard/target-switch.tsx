@@ -35,16 +35,7 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
         Which computer has the keyboard and mouse
       </h1>
       <div className="grid gap-2 md:grid-cols-2">
-        <Half
-          machine="gaming-pc"
-          name="Gaming PC"
-          line="Local input. Nothing is intercepted or forwarded."
-          active={input.target === "gaming-pc"}
-          pending={pendingTarget === "gaming-pc" && input.target !== "gaming-pc"}
-          pendingText={stepText(input.pending?.step, input.hotkeys)}
-          disabled={pendingTarget !== null}
-          onChoose={choose}
-        />
+        {/* Same order as the desks: laptop on the left, gaming PC on the right. */}
         <Half
           machine="laptop"
           name="Laptop"
@@ -59,6 +50,16 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
           pending={pendingTarget === "laptop" && input.target !== "laptop"}
           pendingText={stepText(input.pending?.step, input.hotkeys)}
           disabled={pendingTarget !== null || (!laptopReady && input.target !== "laptop")}
+          onChoose={choose}
+        />
+        <Half
+          machine="gaming-pc"
+          name="Gaming PC"
+          line="Local input. Nothing is intercepted or forwarded."
+          active={input.target === "gaming-pc"}
+          pending={pendingTarget === "gaming-pc" && input.target !== "gaming-pc"}
+          pendingText={stepText(input.pending?.step, input.hotkeys)}
+          disabled={pendingTarget !== null}
           onChoose={choose}
         />
       </div>

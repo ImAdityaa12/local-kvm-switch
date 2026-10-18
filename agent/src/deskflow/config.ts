@@ -11,7 +11,8 @@ export const DESKFLOW_SERVER_PORT = 24810;
 /** Loopback port on the laptop that tunnels to DESKFLOW_SERVER_PORT through the peer link. */
 export const DESKFLOW_TUNNEL_PORT = 24811;
 
-export const HOTKEYS: Hotkeys = { toLaptop: "Ctrl+Alt+Right", toGamingPc: "Ctrl+Alt+Left" };
+/** The laptop sits to the left of the gaming PC, so the hotkeys point the same way. */
+export const HOTKEYS: Hotkeys = { toLaptop: "Ctrl+Alt+Left", toGamingPc: "Ctrl+Alt+Right" };
 
 /**
  * A string value for a QSettings INI file. Always quoted, so commas are not
@@ -101,9 +102,9 @@ export function serverLayout(hotkeys: Hotkeys = HOTKEYS): string {
   return [
     "section: links",
     `\t${SERVER_SCREEN}:`,
-    `\t\tright = ${CLIENT_SCREEN}`,
+    `\t\tleft = ${CLIENT_SCREEN}`,
     `\t${CLIENT_SCREEN}:`,
-    `\t\tleft = ${SERVER_SCREEN}`,
+    `\t\tright = ${SERVER_SCREEN}`,
     "end",
     "",
     "section: options",

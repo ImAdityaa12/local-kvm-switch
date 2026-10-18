@@ -221,7 +221,8 @@ export class DeskflowServerInput implements InputEngine {
     const unexpected = !this.#stopping;
     const error = crashed(code, tail, logFile(this.#p, "server"));
     this.#report({ target: "gaming-pc", engine: "stopped", hooksActive: false, clientConnected: false }, unexpected ? error : undefined);
-    const err = new EngineError(error);
+    // Stopped on purpose (Return to Gaming PC while waiting for the hotkey): a cancel, not a crash.
+    const err = new EngineError(unexpected ? error : { code: "engine-crashed", message: "Switch cancelled" });
     this.#connected.fail(err);
     this.#onLaptop.fail(err);
   }

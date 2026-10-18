@@ -48,9 +48,9 @@ PC. Allow it for **private networks only**. The agent needs inbound TCP 47821 (p
 
 | # | Do | Expect |
 | --- | --- | --- |
-| 1 | Click **Laptop** on the gaming PC dashboard | Steps: asking the laptop, starting Deskflow, then "Press Ctrl+Alt+Right". Press it: the cursor moves to the laptop and the Laptop half lights up. |
+| 1 | Click **Laptop** on the gaming PC dashboard | Steps: asking the laptop, starting Deskflow, then "Press Ctrl+Alt+Left". Press it: the cursor moves to the laptop and the Laptop half lights up. |
 | 2 | Type and move the mouse | The laptop responds. |
-| 3 | Press **Ctrl+Alt+Left** | Cursor returns; within a second "Input engine: Not running", "Global input hooks: None installed". Task Manager shows no `deskflow-core.exe` on the gaming PC. |
+| 3 | Press **Ctrl+Alt+Right** | Cursor returns; within a second "Input engine: Not running", "Global input hooks: None installed". Task Manager shows no `deskflow-core.exe` on the gaming PC. |
 | 4 | Switch to the laptop, then **Return to Gaming PC** | Same as 3. |
 | 5 | While on the laptop, hold Shift and unplug the laptop's network | Within ~10 s input is back on the gaming PC. Check for a stuck Shift on both machines. |
 | 6 | Sleep the laptop while it has input, then wake it | Same as 5; the link reconnects without restarting agents. |
