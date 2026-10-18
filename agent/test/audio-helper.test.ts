@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cableIsDefaultError, HelperAudio, isCablePlayback, isSecondCable } from "../src/audio/engine.ts";
+import { cableIsDefaultError, findCable, HelperAudio, isCablePlayback, isSecondCable } from "../src/audio/engine.ts";
 import { EngineError } from "../src/engines.ts";
 import { HelperProcess, helperPath } from "../src/audio/helper.ts";
 
@@ -211,4 +211,21 @@ test("a second virtual output (Voicemeeter, VB-CABLE A+B) is a fine laptop outpu
   assert.match(withA.detail.hint ?? "", /"CABLE-A Input \(VB-Audio Cable A\)"/);
   const without = cableIsDefaultError("CABLE In 16ch (VB-Audio Virtual Cable)", "", [{ name: "Speakers (Realtek(R) Audio)" }]);
   assert.match(without.detail.hint ?? "", /install Voicemeeter/);
+});
+
+test("the mic's cable is found even after its endpoint was renamed", () => {
+  const renamed = {
+    playback: [
+      { id: "16", name: "CABLE In 16 Ch (VB-Audio Virtual Cable)" },
+      { id: "in", name: "Speakers (VB-Audio Virtual Cable)" },
+      { id: "vm", name: "Voicemeeter Input (VB-Audio Voicemeeter VAIO)" },
+    ],
+    capture: [{ id: "out", name: "CABLE Output (VB-Audio Virtual Cable)" }],
+  };
+  const { input, output } = findCable(renamed);
+  assert.equal(input?.id, "in");
+  assert.equal(output?.id, "out");
+  assert.equal(isCablePlayback("Speakers (VB-Audio Virtual Cable)"), true);
+  assert.equal(isCablePlayback("CABLE In 16 Ch (VB-Audio Virtual Cable)"), true);
+  assert.equal(isSecondCable("Voicemeeter In 1 (VB-Audio Voicemeeter VAIO)"), true);
 });

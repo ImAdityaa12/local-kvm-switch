@@ -27,6 +27,9 @@ export const MIC_TUNNEL_PORT = 24831;
 const START_TIMEOUT_MS = 8_000;
 const VB_PLAYBACK = /^CABLE Input\b/i;
 const VB_RECORDING = /^CABLE Output\b/i;
+/** The device part of the name, which stays when the endpoint itself is renamed (e.g. "Speakers (VB-Audio Virtual Cable)"). */
+const VB_DEVICE = /\(VB-Audio Virtual Cable\)\s*$/i;
+const SIXTEEN_CH = /\b16\s*Ch\b/i;
 /** Windows' AUDCLNT_E_DEVICE_IN_USE. */
 const DEVICE_IN_USE = /0x8889000A/i;
 
@@ -36,7 +39,14 @@ const DEVICE_IN_USE = /0x8889000A/i;
  * to "CABLE In 16ch" also blocks the mic from opening CABLE Input.
  */
 export function isCablePlayback(name: string): boolean {
-  return /^CABLE In(put\b|\s)/i.test(name);
+  return /^CABLE In(put\b|\s)/i.test(name) || (VB_DEVICE.test(name) && !VB_RECORDING.test(name));
+}
+
+/** The cable's playback side the mic is played into, and its recording side apps use, by name or else by device. */
+export function findCable<T extends { name: string }>(d: { playback: T[]; capture: T[] }): { input?: T; output?: T } {
+  const input = d.playback.find((x) => VB_PLAYBACK.test(x.name)) ?? d.playback.find((x) => VB_DEVICE.test(x.name) && !SIXTEEN_CH.test(x.name));
+  const output = d.capture.find((x) => VB_RECORDING.test(x.name)) ?? d.capture.find((x) => VB_DEVICE.test(x.name));
+  return { input, output };
 }
 
 /**
@@ -293,12 +303,11 @@ export class LaptopAudio {
   }
 
   /** The virtual microphone apps can record from, if VB-CABLE is installed. */
-  async endpoint(): Promise<VirtualEndpointState & { playbackId: string | null }> {
+  async endpoint(): Promise<VirtualEndpointState & { playbackId: string | null; playbackName?: string }> {
     const d = await HelperProcess.list(this.#exe);
-    const input = d.playback.find((x) => VB_PLAYBACK.test(x.name));
-    const output = d.capture.find((x) => VB_RECORDING.test(x.name));
+    const { input, output } = findCable(d);
     if (!input || !output) return { present: false, isDefault: null, playbackId: null };
-    return { present: true, name: output.name, isDefault: output.isDefault, playbackId: input.id };
+    return { present: true, name: output.name, isDefault: output.isDefault, playbackId: input.id, playbackName: input.name };
   }
 
   async announceEndpoint(): Promise<void> {
@@ -389,6 +398,6 @@ export class LaptopAudio {
       throw e;
     });
     live = true;
-    this.#log("info", `Playing the gaming PC microphone into CABLE Input; apps record it from ${ep.name ?? "CABLE Output"}`);
+    this.#log("info", `Playing the gaming PC microphone into ${ep.playbackName ?? "CABLE Input"}; apps record it from ${ep.name ?? "CABLE Output"}`);
   }
 }
