@@ -1,7 +1,9 @@
 // Local control channel for the dashboard. Loopback only, origin-checked,
 // token-authenticated, size-capped and rate-limited.
 
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
+import { extname, join, normalize, sep } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -33,6 +35,48 @@ export interface ServerOptions {
   controller: Controller;
   /** Deskflow's enter/exit commands report here (see agent/notify.mjs). */
   notify?: { token: string; onEvent(event: "enter" | "leave"): void };
+  /** The built dashboard (next build → out/), served at / so no Next.js server has to run. */
+  staticDir?: string;
+}
+
+const CONTENT_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".json": "application/json",
+  ".ico": "image/x-icon",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".woff2": "font/woff2",
+};
+
+/** Files only, never outside `dir`; "/" is index.html and "/x" may be x.html. The page holds no secrets: the token arrives in the URL fragment. */
+async function serveStatic(dir: string, pathname: string, res: ServerResponse, head: boolean): Promise<void> {
+  let rel: string;
+  try {
+    rel = normalize(decodeURIComponent(pathname)).replace(/^[\\/]+/, "");
+  } catch {
+    return void res.writeHead(400).end();
+  }
+  if (rel.split(sep).includes("..")) return void res.writeHead(404).end();
+  for (const candidate of rel === "" || rel === "." ? ["index.html"] : [rel, `${rel}.html`]) {
+    const file = join(dir, candidate);
+    try {
+      const body = await readFile(file);
+      res.writeHead(200, {
+        "Content-Type": CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
+        // Hashed build assets never change; pages are re-read so a new build shows at once.
+        "Cache-Control": candidate.startsWith(`_next${sep}static`) ? "public, max-age=31536000, immutable" : "no-cache",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+      });
+      return void res.end(head ? undefined : body);
+    } catch {
+      // try the next candidate
+    }
+  }
+  res.writeHead(404).end();
 }
 
 function tokensMatch(a: string, b: string): boolean {
@@ -62,6 +106,9 @@ export function startControlServer(opts: ServerOptions): Promise<Server> {
         } else res.writeHead(400).end();
       });
       return;
+    }
+    if (opts.staticDir && (req.method === "GET" || req.method === "HEAD") && url.pathname !== CONTROL_PATH) {
+      return void serveStatic(opts.staticDir, url.pathname, res, req.method === "HEAD");
     }
     res.writeHead(404).end();
   });

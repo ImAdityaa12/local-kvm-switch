@@ -44,7 +44,8 @@ const { values } = parseArgs({
     deskflow: { type: "string", default: DEFAULT_DESKFLOW },
     "audio-helper": { type: "string" },
     port: { type: "string", default: "47820" },
-    dashboard: { type: "string", default: "http://localhost:3000" },
+    // Default: the built dashboard the agent serves itself (npm run build). Pass http://localhost:3000 for next dev.
+    dashboard: { type: "string" },
     origin: { type: "string", multiple: true, default: [] },
     unpaired: { type: "boolean", default: false },
     "no-endpoint": { type: "boolean", default: false },
@@ -358,8 +359,11 @@ const built = values.simulate ? await buildSimulated() : await buildReal();
 const { store, controller } = built;
 
 const token = loadOrCreateToken();
-const dashboard = new URL(values.dashboard!).origin;
-const allowedOrigins = [...new Set([dashboard, dashboard.replace("localhost", "127.0.0.1"), ...values.origin!])];
+const builtDashboard = fileURLToPath(new URL("../../out", import.meta.url));
+const haveBuild = existsSync(join(builtDashboard, "index.html"));
+const ownOrigin = `http://127.0.0.1:${port}`;
+const dashboard = new URL(values.dashboard ?? (haveBuild ? ownOrigin : "http://localhost:3000")).origin;
+const allowedOrigins = [...new Set([ownOrigin, `http://localhost:${port}`, dashboard, dashboard.replace("localhost", "127.0.0.1"), ...values.origin!])];
 
 try {
   await startControlServer({
@@ -367,6 +371,7 @@ try {
     port,
     token,
     allowedOrigins,
+    staticDir: haveBuild ? builtDashboard : undefined,
     store,
     controller,
     notify: { token: notifyToken, onEvent: (e) => cursorHandler(e) },

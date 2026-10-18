@@ -93,42 +93,53 @@ so no Rust is needed on the gaming PC.
 
 ---
 
-## Part 4: Start it (each time)
+## Part 4: Start it
 
-Use two terminal windows on each machine.
+### Recommended: in the background, every time you sign in (once per machine)
 
-### Gaming PC
+No terminals, no Next.js server, no browser tab left open. Close any agent or `npm run dev` you
+started in a terminal first, then:
 
-1. **Agent** (terminal 1), with your gaming PC's address:
-   ```
-   cd local-kvm-switch
-   node agent/src/main.ts --machine gaming-pc --bind 192.168.1.20
-   ```
-   The first time, Windows Firewall asks about Node.js: tick **Private networks** only → **Allow**.
-   Copy the `http://localhost:3000/#agent=...` link it prints.
-2. **Dashboard** (terminal 2):
-   ```
-   cd local-kvm-switch
-   npm.cmd run dev
-   ```
-   Open the link from step 1 in your browser.
+- **Gaming PC** (with its address):
+  ```
+  cd local-kvm-switch
+  npm.cmd install
+  npm.cmd run build
+  npm.cmd run autostart -- install --machine gaming-pc --bind 192.168.1.20
+  ```
+- **Laptop:**
+  ```
+  cd C:\Users\Lenovo\Desktop\local-kvm-switcher
+  npm.cmd install
+  npm.cmd run build
+  npm.cmd run autostart -- install --machine laptop
+  ```
 
-### Laptop
+The agent starts right away and again at every sign-in, hidden. If it stops (for example when the
+network is not up yet just after sign-in) it starts again within 10 seconds. It uses about 70–80 MB
+of RAM, plus about 25 MB for Deskflow only while the laptop is in use.
 
-3. **Agent** (terminal 1):
-   ```
-   cd C:\Users\Lenovo\Desktop\local-kvm-switcher
-   node agent/src/main.ts --machine laptop
-   ```
-   Copy the link it prints.
-4. **Dashboard** (terminal 2):
-   ```
-   cd C:\Users\Lenovo\Desktop\local-kvm-switcher
-   npm.cmd run dev
-   ```
-   Open the link from step 3.
+To open the dashboard, use the **LAN KVM** shortcut on the desktop or in the Start menu. It opens
+in a small window of its own; close it when you are done, and the agent keeps running. The laptop
+rarely needs it: switching is done from the gaming PC.
 
-Keep all four windows open while you use it. To stop, press **Ctrl+C** in each.
+After `git pull`, run `npm.cmd run build` again so the dashboard picks up the changes, then run
+`npm.cmd run autostart -- stop` and the install line again (or sign out and back in).
+
+- Stop it until the next sign-in: `npm.cmd run autostart -- stop`
+- Turn it off for good: `npm.cmd run autostart -- remove`
+- Its output: `%LOCALAPPDATA%\LanKvmSwitcher\agent.log`
+
+### Or: in terminals, by hand
+
+1. **Agent:** `node agent/src/main.ts --machine gaming-pc --bind 192.168.1.20` on the gaming PC, or
+   `node agent/src/main.ts --machine laptop` on the laptop. The first time, Windows Firewall asks
+   about Node.js: tick **Private networks** only → **Allow**.
+2. Open the link it prints. If you ran `npm.cmd run build`, the agent serves the dashboard itself.
+   Otherwise run `npm.cmd run dev` in a second terminal (it uses about 450 MB more) and the link
+   points there.
+
+To stop, press **Ctrl+C**.
 
 ---
 
@@ -142,7 +153,8 @@ All controls are on the **gaming PC dashboard**.
    **Press Ctrl+Alt+Left**.
 2. Press **Ctrl+Alt+Left**, or move the cursor off the left edge of the gaming PC's screen (the laptop
    sits to its left). The cursor moves to the laptop; the Laptop half turns green.
-3. Press **Ctrl+Alt+Right**, or move off the laptop's right edge, to come back (or click **Return to Gaming PC**). The dashboard shows
+3. Press **Ctrl+Alt+Right** (or click **Return to Gaming PC**) to come back. Moving to the edge of
+   the laptop's screen never switches back on its own. The dashboard shows
    **Input engine: Not running** and **Global input hooks: None installed**, and the log says
    *Local input confirmed. Input sharing stopped, no hooks installed.* That message is normal here.
 
@@ -182,8 +194,8 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 
 When asking for help, send from the machine that shows the error:
 
-1. The **WARN** / **ERROR** lines in the agent window (terminal 1). Errors are printed there as
-   text, so you can copy them.
+1. The **WARN** / **ERROR** lines the agent prints (in its terminal, or in `%LOCALAPPDATA%\LanKvmSwitcher\agent.log`
+   when it runs in the background). Errors are printed there as text, so you can copy them.
 2. Deskflow's log from its last run. Press **Win+R**, paste
    `%LOCALAPPDATA%\LanKvmSwitcher\deskflow` and press Enter. Send `deskflow-server.log` (gaming PC)
    or `deskflow-client.log` (laptop). Each switch overwrites it, so copy it before trying again.

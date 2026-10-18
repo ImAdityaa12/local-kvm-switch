@@ -11,7 +11,9 @@
     "test": "node --test --test-timeout=20000 \"agent/test/*.test.ts\"",
     "agent:sim": "node agent/src/main.ts --simulate",
     "build:audio": "node scripts/build-audio.mjs",
-    "test:audio": "node scripts/build-audio.mjs --test"
+    "test:audio": "node scripts/build-audio.mjs --test",
+    "autostart": "node scripts/autostart.mjs",
+    "logs": "node scripts/logs.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
