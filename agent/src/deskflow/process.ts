@@ -33,6 +33,8 @@ export class CoreProcess {
   #child: ChildProcess | null = null;
   #exited: Promise<void> = Promise.resolve();
   #tail: string[] = [];
+  /** Set by stop(), so the exit that follows is not reported as a failure. */
+  #stopRequested = false;
   #log: WriteStream | null = null;
 
   constructor(o: CoreProcessOptions) {
@@ -46,6 +48,7 @@ export class CoreProcess {
   start(): Promise<void> {
     if (this.#child) return Promise.resolve();
     this.#tail = [];
+    this.#stopRequested = false;
     this.#log?.end();
     this.#log = null;
     if (this.#o.logFile) {
@@ -106,7 +109,7 @@ export class CoreProcess {
   }
 
   #endLog(note: string): void {
-    remoteLog.write("deskflow", /code 0$/.test(note) ? "info" : "warn", note);
+    remoteLog.write("deskflow", this.#stopRequested || /code 0$/.test(note) ? "info" : "warn", this.#stopRequested ? `${note} (stopped by the agent)` : note);
     this.#log?.end(`# ${note}\r\n`);
     this.#log = null;
   }
@@ -115,6 +118,7 @@ export class CoreProcess {
   async stop(timeoutMs = 5_000): Promise<void> {
     const child = this.#child;
     if (!child || child.pid === undefined) return;
+    this.#stopRequested = true;
     if (process.platform === "win32") {
       spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => child.kill());
     } else {
