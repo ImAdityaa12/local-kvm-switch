@@ -48,9 +48,9 @@ test("layout binds the switch hotkeys", () => {
   const l = serverLayout();
   assert.match(l, /keystroke\(control\+alt\+Left\) = switchToScreen\(laptop\)/);
   assert.match(l, /keystroke\(control\+alt\+Right\) = switchToScreen\(gaming-pc\)/);
-  // The laptop is to the left of the gaming PC.
+  // The laptop is to the left of the gaming PC, and no laptop edge leads back.
   assert.match(l, /\tgaming-pc:\r\n\t\tleft = laptop/);
-  assert.match(l, /\tlaptop:\r\n\t\tright = gaming-pc/);
+  assert.doesNotMatch(l, /\tlaptop:/);
   assert.doesNotMatch(l, /section: screens/);
 });
 

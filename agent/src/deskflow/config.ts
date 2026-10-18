@@ -101,10 +101,11 @@ function keystroke(h: string): string {
 export function serverLayout(hotkeys: Hotkeys = HOTKEYS): string {
   return [
     "section: links",
+    // One way only: the gaming PC's left edge leads to the laptop, but no laptop
+    // edge leads back, so reaching the side of the laptop screen never switches.
+    // Coming back is the hotkey or Return to Gaming PC.
     `\t${SERVER_SCREEN}:`,
     `\t\tleft = ${CLIENT_SCREEN}`,
-    `\t${CLIENT_SCREEN}:`,
-    `\t\tright = ${SERVER_SCREEN}`,
     "end",
     "",
     "section: options",
