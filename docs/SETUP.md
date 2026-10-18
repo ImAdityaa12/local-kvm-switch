@@ -105,6 +105,7 @@ started in a terminal first, then:
   cd local-kvm-switch
   npm.cmd install
   npm.cmd run build
+  npm.cmd run build:audio
   npm.cmd run autostart -- install --machine gaming-pc --bind 192.168.1.20
   ```
 - **Laptop:**
@@ -112,6 +113,7 @@ started in a terminal first, then:
   cd C:\Users\Lenovo\Desktop\local-kvm-switcher
   npm.cmd install
   npm.cmd run build
+  npm.cmd run build:audio
   npm.cmd run autostart -- install --machine laptop
   ```
 
@@ -119,11 +121,19 @@ The agent starts right away and again at every sign-in, hidden. If it stops (for
 network is not up yet just after sign-in) it starts again within 10 seconds. It uses about 70–80 MB
 of RAM, plus about 25 MB for Deskflow only while the laptop is in use.
 
-To open the dashboard, use the **LAN KVM** shortcut on the desktop or in the Start menu. It opens
+A **LAN KVM** dot appears in the notification area (bottom right; at first it may be hidden under
+the **^** arrow, so drag it onto the taskbar to keep it in view). Its colour says who has the keyboard
+and mouse: **grey** the gaming PC, **green** the laptop, **amber** switching, **red** the other
+machine is not reachable. Hover it for the details. Right-click it for **Switch to laptop**,
+**Return to Gaming PC** and **Open dashboard**; left-click it to open the dashboard. The icon needs
+`npm.cmd run build:audio` (it is built with the audio helper) and goes away when the agent stops.
+
+You can also open the dashboard with the **LAN KVM** shortcut on the desktop or in the Start menu. It opens
 in a small window of its own; close it when you are done, and the agent keeps running. The laptop
 rarely needs it: switching is done from the gaming PC.
 
-After `git pull`, run `npm.cmd run build` again so the dashboard picks up the changes, then run
+After `git pull`, run `npm.cmd run build` (and `npm.cmd run build:audio` if anything under `native/`
+changed) again, then run
 `npm.cmd run autostart -- stop` and the install line again (or sign out and back in).
 
 - Stop it until the next sign-in: `npm.cmd run autostart -- stop`

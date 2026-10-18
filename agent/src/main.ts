@@ -29,6 +29,7 @@ import { PairingManager } from "./peer/manager.ts";
 import { TrustStore } from "./peer/trust.ts";
 import { CONTROL_PATH, startControlServer } from "./server.ts";
 import { Store } from "./store.ts";
+import { Tray, openDashboard, trayPath, trayView } from "./tray.ts";
 import { logDatabaseUrl, remoteLog, saveLogDatabaseUrl } from "./remote-log.ts";
 import { dataDir, loadOrCreateToken } from "./token.ts";
 import { SimAudio, SimInput, SimPairing, SimWorld } from "./sim/world.ts";
@@ -49,6 +50,7 @@ const { values } = parseArgs({
     origin: { type: "string", multiple: true, default: [] },
     unpaired: { type: "boolean", default: false },
     "no-endpoint": { type: "boolean", default: false },
+    "no-tray": { type: "boolean", default: false },
     "log-db": { type: "string" },
   },
 });
@@ -414,6 +416,27 @@ function echoEvents(events: typeof store.state.events): void {
 echoEvents(store.state.events);
 store.subscribe((s) => echoEvents(s.events));
 
+// The notification-area icon: shows who has the keyboard and mouse, and switches from its menu.
+const tray = values["no-tray"]
+  ? null
+  : Tray.start(
+      trayPath(fileURLToPath(new URL("../..", import.meta.url))),
+      (action) => {
+        if (action === "dashboard") {
+          if (!openDashboard(link.toString())) store.log("warn", `No Chrome or Edge found. Open ${link.origin} with the link the agent printed.`);
+          return;
+        }
+        // The controller logs any failure itself, and the icon shows the result.
+        const cmd = action === "switch" ? ({ type: "input.setTarget", target: "laptop" } as const) : ({ type: "input.returnLocal" } as const);
+        controller.handle(cmd).catch(() => {});
+      },
+      (message) => store.log("warn", message),
+    );
+if (tray) {
+  tray.show(trayView(store.state));
+  store.subscribe((s) => tray.show(trayView(s)));
+}
+
 let stopping = false;
 async function shutdown() {
   if (stopping) return;
@@ -421,6 +444,7 @@ async function shutdown() {
   console.log("Stopping: returning input to this PC and releasing resources…");
   await controller.shutdown().catch(() => {});
   await built.dispose().catch(() => {});
+  tray?.stop();
   await remoteLog.stop();
   process.exit(0);
 }
