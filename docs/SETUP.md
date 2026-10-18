@@ -31,9 +31,16 @@ Follow the parts in order. Parts 1–3 are done once; Part 4 is what you do each
    1. Download from https://vb-audio.com/Cable/ and **extract** the zip.
    2. Right-click `VBCABLE_Setup_x64.exe` → **Run as administrator** → **Install Driver**.
    3. **Reboot.**
-   4. Settings → System → Sound → **Output**: choose your speakers or headphones again (the installer
-      may have switched it to "CABLE Input" or "CABLE In 16ch"; leaving it there mutes the laptop,
-      blocks the laptop-audio route and stops the microphone from starting).
+   4. Settings → System → Sound → **Output**: do not leave it on "CABLE Input" or "CABLE In 16ch"
+      (the installer may have chosen one). That cable carries your mic, so laptop sound there blocks
+      the microphone and the laptop-audio route. Step 6 sets the output.
+6. **VB-CABLE A+B** (so laptop sound plays only in your IEM, not on the laptop's speakers). Optional:
+   without it, set Output to your speakers or headphones and the laptop plays its sound there too.
+   1. On https://vb-audio.com/Cable/ download **VB-CABLE A+B** (donationware) and **extract** the zip.
+   2. Right-click `VBCABLE_Setup_x64.exe` from that zip → **Run as administrator** → **Install Driver**.
+   3. **Reboot.**
+   4. Settings → System → Sound → **Output** → **CABLE-A Input (VB-Audio Cable A)**. The laptop's
+      speakers go quiet; the agent sends what plays there to your IEM.
 
 ---
 
@@ -169,7 +176,9 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 
 ### Laptop sound in your IEM
 
-1. **Laptop audio to Gaming PC → Play on**: choose the device your IEM is plugged into.
+1. **Laptop audio to Gaming PC → Play on**: choose the gaming PC device your IEM is plugged into.
+   (This is the gaming PC's device; the laptop's own output is set in its Windows Sound settings,
+   Part 1 step 6.)
 2. Turn the switch on. It shows **Streaming** once sound arrives.
 3. Play something on the laptop.
 
@@ -194,7 +203,7 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 | Clicking **Laptop** never reaches *Press Ctrl+Alt+Left* (or Ctrl+Alt+Left does nothing), and the laptop's log says *Local input confirmed…* right after the switch starts | The laptop is running an older version that stopped its own Deskflow straight away. Update the laptop (`git pull`, Part 2) and restart the laptop agent. |
 | Laptop shows **Unreachable** | Same network? Correct `--bind` address on the gaming PC? Allowed Node.js through the firewall for **Private** networks? Network set to **Private**, not Public, in Windows settings? |
 | Pairing: "Could not reach …" | Open pairing on the gaming PC first; it stays open for two minutes. Check the address. |
-| "The laptop's sound output is "CABLE …", part of the virtual cable", or the microphone fails with *0x8889000A* | On the laptop: Settings → System → Sound → Output → your speakers or headphones. Sound sent to "CABLE In 16ch" keeps the microphone from opening "CABLE Input". |
+| "The laptop's sound output is "CABLE …", the microphone's cable", or the microphone fails with *0x8889000A* | On the laptop: Settings → System → Sound → Output → **CABLE-A Input** (Part 1, step 6), or your speakers or headphones. Sound sent to "CABLE In 16ch" keeps the microphone from opening "CABLE Input". |
 | "The laptop has no virtual microphone" | Install VB-CABLE on the laptop (Part 1, step 5), reboot, restart the laptop agent. |
 | "The audio helper is not built" | Put `kvm-audio.exe` in `native\kvm-audio\target\release\` (Part 2), restart the agent. |
 | Dashboard says **No agent** | The agent window was closed. Start it again and open the new link. |

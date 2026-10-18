@@ -39,11 +39,24 @@ export function isCablePlayback(name: string): boolean {
   return /^CABLE In(put\b|\s)/i.test(name);
 }
 
-function cableIsDefaultError(name: string, what: string): EngineError {
+/**
+ * VB-CABLE A+B: separate cables ("CABLE-A Input", "CABLE-B Input"). Laptop sound
+ * set to one of them reaches the IEM without the laptop's speakers playing it,
+ * and leaves the mic's cable alone.
+ */
+export function isSecondCable(name: string): boolean {
+  return /^CABLE-[AB] In(put\b|\s)/i.test(name);
+}
+
+/** The laptop's output is the mic's cable: say what to choose instead. */
+export function cableIsDefaultError(name: string, what: string, playback: { name: string }[]): EngineError {
+  const second = playback.find((x) => isSecondCable(x.name));
   return new EngineError({
     code: "device-missing",
-    message: `The laptop's sound output is "${name}", part of the virtual cable. ${what}`,
-    hint: "On the laptop: Settings → System → Sound → Output → choose your speakers or headphones.",
+    message: `The laptop's sound output is "${name}", the microphone's cable. ${what}`,
+    hint: second
+      ? `On the laptop: Settings → System → Sound → Output → "${second.name}". Laptop sound then goes only to your IEM.`
+      : "To hear laptop sound only in your IEM, install VB-CABLE A+B on the laptop and set Sound → Output to \"CABLE-A Input\". Or choose your speakers or headphones.",
   });
 }
 
@@ -319,7 +332,7 @@ export class LaptopAudio {
     // so this would send your own voice back into your ears.
     const d = await HelperProcess.list(this.#exe);
     const def = d.playback.find((x) => x.isDefault);
-    if (def && isCablePlayback(def.name)) throw cableIsDefaultError(def.name, "Sending it would put your own voice back into your ears.");
+    if (def && isCablePlayback(def.name)) throw cableIsDefaultError(def.name, "Sending it would put your own voice back into your ears.", d.playback);
     const s = HelperProcess.spawn(this.#exe, ["send", "--connect", `127.0.0.1:${AUDIO_TUNNEL_PORT}`]);
     this.#sender = s;
     const started = await waitEvent(s, "streaming", START_TIMEOUT_MS).catch(async (e) => {
@@ -327,7 +340,7 @@ export class LaptopAudio {
       throw e;
     });
     const f = started.format as AudioFormat;
-    this.#log("info", `Sending this laptop's audio at ${f.sampleRate / 1000} kHz, ${f.channels} ch, ${f.bitDepth}-bit`);
+    this.#log("info", `Sending this laptop's audio${def ? ` from ${def.name}` : ""} at ${f.sampleRate / 1000} kHz, ${f.channels} ch, ${f.bitDepth}-bit`);
     void s.exited.then(() => {
       if (this.#sender === s) {
         this.#sender = null;
@@ -343,8 +356,9 @@ export class LaptopAudio {
       throw new EngineError({ code: "endpoint-missing", message: "VB-CABLE is not installed on the laptop.", hint: "Install it, reboot, and restart the agent." });
     }
     // Laptop sound going into the cable blocks CABLE Input and mixes into the mic.
-    const def = (await HelperProcess.list(this.#exe)).playback.find((x) => x.isDefault);
-    if (def && isCablePlayback(def.name)) throw cableIsDefaultError(def.name, "It blocks the microphone and would mix laptop sounds into it.");
+    const playback = (await HelperProcess.list(this.#exe)).playback;
+    const def = playback.find((x) => x.isDefault);
+    if (def && isCablePlayback(def.name)) throw cableIsDefaultError(def.name, "It blocks the microphone and would mix laptop sounds into it.", playback);
     const p = HelperProcess.spawn(this.#exe, ["play", "--connect", `127.0.0.1:${MIC_TUNNEL_PORT}`, "--device", ep.playbackId, "--volume", String(volume)]);
     this.#micPlayer = p;
     let live = false;

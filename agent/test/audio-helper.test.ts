@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HelperAudio, isCablePlayback } from "../src/audio/engine.ts";
+import { cableIsDefaultError, HelperAudio, isCablePlayback, isSecondCable } from "../src/audio/engine.ts";
 import { EngineError } from "../src/engines.ts";
 import { HelperProcess, helperPath } from "../src/audio/helper.ts";
 
@@ -194,4 +194,15 @@ test("the mic route fails cleanly when the laptop refuses it", { skip }, async (
   await new Promise((r) => setTimeout(r, 500));
   process.off("unhandledRejection", onUnhandled);
   assert.deepEqual(unhandled, []);
+});
+
+test("the second cable (VB-CABLE A+B) is a fine laptop output, and the error points to it", () => {
+  assert.equal(isSecondCable("CABLE-A Input (VB-Audio Cable A)"), true);
+  assert.equal(isSecondCable("CABLE-B In 16ch (VB-Audio Cable B)"), true);
+  assert.equal(isCablePlayback("CABLE-A Input (VB-Audio Cable A)"), false);
+  assert.equal(isSecondCable("CABLE Input (VB-Audio Virtual Cable)"), false);
+  const withA = cableIsDefaultError("CABLE In 16ch (VB-Audio Virtual Cable)", "", [{ name: "CABLE-A Input (VB-Audio Cable A)" }]);
+  assert.match(withA.detail.hint ?? "", /"CABLE-A Input \(VB-Audio Cable A\)"/);
+  const without = cableIsDefaultError("CABLE In 16ch (VB-Audio Virtual Cable)", "", [{ name: "Speakers (Realtek(R) Audio)" }]);
+  assert.match(without.detail.hint ?? "", /install VB-CABLE A\+B/);
 });
