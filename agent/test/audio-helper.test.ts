@@ -8,7 +8,8 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isCablePlayback } from "../src/audio/engine.ts";
+import { HelperAudio, isCablePlayback } from "../src/audio/engine.ts";
+import { EngineError } from "../src/engines.ts";
 import { HelperProcess, helperPath } from "../src/audio/helper.ts";
 
 const exe = helperPath(fileURLToPath(new URL("../..", import.meta.url)));
@@ -177,4 +178,20 @@ test("every input of the virtual cable counts as the cable, nothing else does", 
   assert.equal(isCablePlayback("CABLE In 16ch (VB-Audio Virtual Cable)"), true);
   assert.equal(isCablePlayback("CABLE Output (VB-Audio Virtual Cable)"), false);
   assert.equal(isCablePlayback("Speakers (Realtek(R) Audio)"), false);
+});
+
+test("the mic route fails cleanly when the laptop refuses it", { skip }, async () => {
+  const devices = await HelperProcess.list(exe);
+  const mic = devices.capture[0];
+  if (!mic) return;
+  const refused = new EngineError({ code: "device-missing", message: "refused by the laptop" });
+  const audio = new HelperAudio(exe, { request: async (req) => { if (req.op === "audio.start") throw refused; } });
+  audio.setEndpoint({ present: true, isDefault: false });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (e: unknown) => unhandled.push(e);
+  process.on("unhandledRejection", onUnhandled);
+  await assert.rejects(audio.start("micToLaptop", mic.id), /refused by the laptop/);
+  await new Promise((r) => setTimeout(r, 500));
+  process.off("unhandledRejection", onUnhandled);
+  assert.deepEqual(unhandled, []);
 });

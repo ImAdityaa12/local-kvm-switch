@@ -212,6 +212,9 @@ export class HelperAudio implements AudioEngine {
     try {
       await waitEvent(sender, "listening", START_TIMEOUT_MS, "microphone");
       const streaming = waitEvent(sender, "streaming", START_TIMEOUT_MS, "microphone");
+      // Awaited below. If the laptop refuses first, stopping the sender fails this
+      // one, and that must not crash the agent.
+      streaming.catch(() => {});
       await this.#peer.request({ op: "audio.start", route, volume: this.#volume[route] });
       started = await streaming;
     } catch (e) {
