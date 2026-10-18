@@ -36,6 +36,9 @@ test("server settings keep Deskflow on loopback, TLS off (tunnelled), enter/exit
   assert.match(s, /enableExitCommand=true/);
   assert.match(s, /externalConfigFile="C:\/d\/layout\.conf"/);
   assert.match(s, /level=Debug/);
+  // Deskflow 1.27 only knows computers declared here; without them the layout fails to load.
+  assert.match(s, /\[computer_gaming-pc\]\r\nname="gaming-pc"/);
+  assert.match(s, /\[computer_laptop\]\r\nname="laptop"/);
   const c = settingsIni({ mode: "client", port: 24811, enterCommand: "a", exitCommand: "b" });
   assert.match(c, /remoteHost="127\.0\.0\.1"/);
   assert.doesNotMatch(c, /interface=/);
@@ -45,6 +48,7 @@ test("layout binds the switch hotkeys", () => {
   const l = serverLayout();
   assert.match(l, /keystroke\(control\+alt\+Right\) = switchToScreen\(laptop\)/);
   assert.match(l, /keystroke\(control\+alt\+Left\) = switchToScreen\(gaming-pc\)/);
+  assert.doesNotMatch(l, /section: screens/);
 });
 
 function paths(): DeskflowPaths {

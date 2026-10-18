@@ -73,6 +73,14 @@ export function settingsIni(o: SettingsInput): string {
       "enableClipboard=false",
       "disableLockToComputer=true",
       "",
+      // Since 1.27 the server learns its computers from these groups
+      // (Settings::knownComputers); a layout file's "screens" section is skipped.
+      `[computer_${SERVER_SCREEN}]`,
+      `name=${iniString(SERVER_SCREEN)}`,
+      "",
+      `[computer_${CLIENT_SCREEN}]`,
+      `name=${iniString(CLIENT_SCREEN)}`,
+      "",
     );
   } else {
     lines.push("[client]", `remoteHost=${iniString("127.0.0.1")}`, "languageSync=true", "");
@@ -88,13 +96,9 @@ function keystroke(h: string): string {
     .join("+");
 }
 
+/** Links and hotkeys only: the computers themselves are declared in the server settings. */
 export function serverLayout(hotkeys: Hotkeys = HOTKEYS): string {
   return [
-    "section: screens",
-    `\t${SERVER_SCREEN}:`,
-    `\t${CLIENT_SCREEN}:`,
-    "end",
-    "",
     "section: links",
     `\t${SERVER_SCREEN}:`,
     `\t\tright = ${CLIENT_SCREEN}`,
