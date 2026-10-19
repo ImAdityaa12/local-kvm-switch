@@ -10,12 +10,19 @@ import { remoteLog, type LogLevel } from "../remote-log.ts";
 
 const TAIL_LINES = 20;
 
-function lineLevel(line: string): LogLevel {
+export function lineLevel(line: string): LogLevel {
   const m = /\b(FATAL|ERROR|WARNING|NOTE|INFO|DEBUG\d?)\b/.exec(line);
   if (!m) return "info";
   if (m[1] === "FATAL" || m[1] === "ERROR") return "error";
   if (m[1] === "WARNING") return "warn";
   return m[1].startsWith("DEBUG") ? "debug" : "info";
+}
+
+/** A running deskflow-core, however it was started. */
+export interface Core {
+  readonly running: boolean;
+  start(): Promise<void>;
+  stop(): Promise<void>;
 }
 
 export interface CoreProcessOptions {
@@ -28,7 +35,7 @@ export interface CoreProcessOptions {
   onExit(code: number | null, tail: string[]): void;
 }
 
-export class CoreProcess {
+export class CoreProcess implements Core {
   #o: CoreProcessOptions;
   #child: ChildProcess | null = null;
   #exited: Promise<void> = Promise.resolve();

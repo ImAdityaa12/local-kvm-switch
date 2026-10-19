@@ -20,10 +20,13 @@ Follow the parts in order. Parts 1–3 are done once; Part 4 is what you do each
 2. **Git**: https://git-scm.com/download/win
 3. **Deskflow 1.27.0**: https://github.com/deskflow/deskflow/releases/tag/v1.27.0, file
    `deskflow-1.27.0-win-x64.msi`. Use this stable release, **not** "continuous".
-4. **Nothing to set up in Deskflow.** The agent starts Deskflow itself, only when needed. The Deskflow
-   service starts with Windows and would block it, so the background install (Part 4) turns the
-   service off; Windows asks for admin permission once. If the Deskflow app is open, the agent closes
-   it when you switch. You never need to open or configure the Deskflow app.
+4. **Nothing to set up in Deskflow.** The agent starts Deskflow itself, only when needed. On the
+   gaming PC the Deskflow service would block it, so the background install (Part 4) turns the
+   service off. On the laptop the install turns the service **on**: the agent has it start Deskflow,
+   because only Deskflow started by the service reaches windows that run as admin (Device Manager,
+   Task Manager) and Windows permission prompts. Windows asks for admin permission once on each
+   machine. If the Deskflow app is open, the agent closes it when you switch. You never need to open
+   or configure the Deskflow app.
 
 ### On the laptop only
 
@@ -124,8 +127,10 @@ started in a terminal first, then:
   npm.cmd run autostart -- install --machine laptop
   ```
 
-The install also turns off the Deskflow service, which would otherwise start its own Deskflow at every
-boot and block switching: click **Yes** when Windows asks. The agent starts right away and again at
+On the gaming PC the install also turns off the Deskflow service, which would otherwise start its own
+Deskflow at every boot and block switching. On the laptop it turns the service on, so the keyboard and
+mouse also work in admin windows and permission prompts there. Click **Yes** when Windows asks. The
+service starts nothing by itself; the agent asks it to run Deskflow only while the laptop is in use. The agent starts right away and again at
 every sign-in, hidden. If it stops (for example when the
 network is not up yet just after sign-in) it starts again within 10 seconds. It uses about 70–80 MB
 of RAM, plus about 25 MB for Deskflow only while the laptop is in use.
@@ -203,7 +208,8 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 | --- | --- |
 | `npm.ps1 cannot be loaded because running scripts is disabled` | Use `npm.cmd` instead of `npm`. |
 | "Deskflow was not found at …" | Install `deskflow-1.27.0-win-x64.msi` on **that** machine. If installed elsewhere, add `--deskflow "C:\path\to\deskflow-core.exe"` to the agent command. A message starting with the other machine's name came from the other machine. |
-| "The Deskflow service is already running Deskflow" (often right after a restart) | In the project folder run `npm.cmd run autostart -- disable-deskflow` and click **Yes**. Or by hand: `services.msc` → **Deskflow** → **Stop**, and **Startup type** → **Disabled**. |
+| "The Deskflow service is already running Deskflow" (often right after a restart; gaming PC) | In the project folder run `npm.cmd run autostart -- disable-deskflow` and click **Yes**. Or by hand: `services.msc` → **Deskflow** → **Stop**, and **Startup type** → **Disabled**. |
+| On the laptop the keyboard and mouse stop working in Device Manager, Task Manager, an admin window, a permission (UAC) prompt or the lock screen, or the laptop's log says *The Deskflow service is off* | On the laptop, in the project folder, run `npm.cmd run autostart -- enable-deskflow` and click **Yes**. Or by hand: `services.msc` → **Deskflow** → **Startup type** → **Automatic**, then **Start**. It takes effect from the next switch to the laptop. |
 | "The Deskflow app is already running Deskflow" | The agent closes the app by itself, so this means it could not. Right-click the Deskflow tray icon → **Quit**, and Task Manager → **Startup apps** → **Deskflow** → **Disable**. |
 | Clicking **Laptop** never reaches *Press Ctrl+Alt+Left* (or Ctrl+Alt+Left does nothing), and the laptop's log says *Local input confirmed…* right after the switch starts | The laptop is running an older version that stopped its own Deskflow straight away. Update the laptop (`git pull`, Part 2) and restart the laptop agent. |
 | Laptop shows **Unreachable** | Same network? Correct `--bind` address on the gaming PC? Allowed Node.js through the firewall for **Private** networks? Network set to **Private**, not Public, in Windows settings? |

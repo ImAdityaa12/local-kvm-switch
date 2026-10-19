@@ -10,6 +10,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentError, InputEngineStatus } from "../../../lib/protocol/index.ts";
 import { EngineError, type InputEngine, type InputReport } from "../engines.ts";
 import {
@@ -27,7 +28,8 @@ import {
   serverLayout,
   settingsIni,
 } from "./config.ts";
-import { CoreProcess } from "./process.ts";
+import { DaemonCore, daemonRunning } from "./daemon.ts";
+import { CoreProcess, type Core } from "./process.ts";
 import { preflight } from "./preflight.ts";
 
 export type CursorEvent = "enter" | "leave";
@@ -40,21 +42,32 @@ export interface DeskflowPaths {
   dir: string;
   /** Builds the command Deskflow runs on enter/leave. */
   notifyCommand(event: CursorEvent): string[];
+  /** Laptop: the Deskflow service's pipe. While the service answers there, the client runs through it (daemon.ts). */
+  servicePipe?: string;
 }
 
-function writeFiles(p: DeskflowPaths, mode: "server" | "client"): string {
+/** Deskflow started by the service opens a console for each enter/leave command; this runs it without one. */
+export function hiddenCommand(args: string[]): string[] {
+  const wscript = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "wscript.exe");
+  const runner = fileURLToPath(new URL("../../notify-hidden.vbs", import.meta.url));
+  return [wscript, "//B", "//Nologo", runner, ...args].map((a) => a.replace(/\\/g, "/"));
+}
+
+function writeFiles(p: DeskflowPaths, mode: "server" | "client", service = false): string {
   mkdirSync(p.dir, { recursive: true });
   const settingsFile = join(p.dir, `deskflow-${mode}.conf`);
   const layoutFile = join(p.dir, "deskflow-layout.conf").replace(/\\/g, "/");
   if (mode === "server") writeFileSync(layoutFile, serverLayout(HOTKEYS));
+  const notify = (event: CursorEvent) => commandLine(service ? hiddenCommand(p.notifyCommand(event)) : p.notifyCommand(event));
   writeFileSync(
     settingsFile,
     settingsIni({
       mode,
       port: mode === "server" ? DESKFLOW_SERVER_PORT : DESKFLOW_TUNNEL_PORT,
       layoutFile: mode === "server" ? layoutFile : undefined,
-      enterCommand: commandLine(p.notifyCommand("enter")),
-      exitCommand: commandLine(p.notifyCommand("leave")),
+      enterCommand: notify("enter"),
+      exitCommand: notify("leave"),
+      service: service ? { logFile: logFile(p, mode).replace(/\\/g, "/") } : undefined,
     }),
   );
   return settingsFile;
@@ -239,14 +252,17 @@ export interface ClientStatus {
 /** Laptop side: runs the Deskflow client while the gaming PC asks for it. */
 export class DeskflowClient {
   #p: DeskflowPaths;
-  #proc: CoreProcess | null = null;
+  #proc: Core | null = null;
   #status: ClientStatus = { engine: "stopped", connected: false, entered: false };
   #onStatus: (s: ClientStatus, error?: AgentError) => void;
+  #warn: (message: string) => void;
+  #warned = false;
   #stopping = false;
 
-  constructor(paths: DeskflowPaths, onStatus: (s: ClientStatus, error?: AgentError) => void) {
+  constructor(paths: DeskflowPaths, onStatus: (s: ClientStatus, error?: AgentError) => void, warn: (message: string) => void = () => {}) {
     this.#p = paths;
     this.#onStatus = onStatus;
+    this.#warn = warn;
   }
 
   get status(): ClientStatus {
@@ -260,23 +276,30 @@ export class DeskflowClient {
 
   async start(): Promise<void> {
     if (this.#proc?.running) return;
-    if (!this.#p.exePrefixArgs) await preflight(this.#p.exe);
+    const service = this.#p.servicePipe !== undefined && (await daemonRunning(this.#p.servicePipe));
+    if (!service && this.#p.servicePipe !== undefined && !this.#warned) {
+      this.#warned = true;
+      this.#warn(
+        "The Deskflow service is off, so Deskflow runs without admin rights: windows that run as admin (Device Manager, Task Manager) and Windows permission prompts will not take the keyboard and mouse. Run npm.cmd run autostart -- enable-deskflow once in the project folder to fix this.",
+      );
+    }
+    // A core the service started is replaced by ours; anything else still blocks.
+    if (!this.#p.exePrefixArgs) await preflight(this.#p.exe, [], undefined, service);
     this.#set({ engine: "starting" });
-    const settings = writeFiles(this.#p, "client");
+    const settings = writeFiles(this.#p, "client", service);
+    const log = logFile(this.#p, "client");
     this.#stopping = false;
-    this.#proc = new CoreProcess({
-      exe: this.#p.exe,
-      args: [...(this.#p.exePrefixArgs ?? []), "client", "-s", settings],
-      logFile: logFile(this.#p, "client"),
-      onLine: (l) => {
-        if (RE_DISCONNECTED_FROM_SERVER.test(l)) this.#set({ connected: false, entered: false });
-        else if (RE_CONNECTED_TO_SERVER.test(l)) this.#set({ connected: true });
-      },
-      onExit: (code, tail) => {
-        this.#proc = null;
-        this.#set({ engine: "stopped", connected: false, entered: false }, this.#stopping ? undefined : crashed(code, tail, logFile(this.#p, "client")));
-      },
-    });
+    const onLine = (l: string) => {
+      if (RE_DISCONNECTED_FROM_SERVER.test(l)) this.#set({ connected: false, entered: false });
+      else if (RE_CONNECTED_TO_SERVER.test(l)) this.#set({ connected: true });
+    };
+    const onExit = (code: number | null, tail: string[]) => {
+      this.#proc = null;
+      this.#set({ engine: "stopped", connected: false, entered: false }, this.#stopping ? undefined : crashed(code, tail, log));
+    };
+    this.#proc = service
+      ? new DaemonCore({ pipe: this.#p.servicePipe!, settingsFile: settings, logFile: log, onLine, onExit })
+      : new CoreProcess({ exe: this.#p.exe, args: [...(this.#p.exePrefixArgs ?? []), "client", "-s", settings], logFile: log, onLine, onExit });
     try {
       await this.#proc.start();
     } catch (e) {

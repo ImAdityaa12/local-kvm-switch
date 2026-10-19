@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commandLine, iniString, serverLayout, settingsIni } from "../src/deskflow/config.ts";
 import { conflictDetail } from "../src/deskflow/preflight.ts";
-import { DeskflowServerInput, crashed, lastError, type DeskflowPaths } from "../src/deskflow/engines.ts";
+import { DeskflowClient, DeskflowServerInput, crashed, lastError, type ClientStatus, type DeskflowPaths } from "../src/deskflow/engines.ts";
 import type { InputReport } from "../src/engines.ts";
 
 /** Reference reader for a quoted QSettings INI string (the subset we emit). */
@@ -140,4 +141,82 @@ test("a Deskflow we did not start is named by what started it", () => {
   assert.match(conflictDetail(["deskflow-daemon.exe"]).message, /Deskflow service/);
   assert.match(conflictDetail(["node.exe"]).message, /Another LAN KVM agent/);
   assert.match(conflictDetail([""]).hint, /Task Manager/);
+});
+
+test("client settings for the Deskflow service: client mode, run as SYSTEM, output to a file", () => {
+  const c = settingsIni({ mode: "client", port: 24811, enterCommand: "a", exitCommand: "b", service: { logFile: "C:/d/deskflow-client.log" } });
+  assert.match(c, /\[core\]\r\ncomputerName=laptop\r\ncoreMode=1\r\n/);
+  assert.match(c, /\[log\]\r\nlevel=Debug\r\ntoFile=true\r\nfile="C:\/d\/deskflow-client\.log"/);
+  assert.match(c, /\[daemon\]\r\nelevate=true/);
+  const direct = settingsIni({ mode: "client", port: 24811, enterCommand: "a", exitCommand: "b" });
+  assert.doesNotMatch(direct, /coreMode|\[daemon\]|elevate/);
+  assert.match(direct, /toFile=false/);
+});
+
+/** Stands in for deskflow-daemon: answers "ok" and, on start, writes the client's log like its core would. */
+async function fakeService() {
+  const name = `kvm-test-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  const pipe = process.platform === "win32" ? `\\\\.\\pipe\\${name}` : join(tmpdir(), `${name}.sock`);
+  const commands: string[] = [];
+  let configFile = "";
+  const server = createServer((socket) => {
+    socket.setEncoding("utf8");
+    let rest = "";
+    socket.on("data", (chunk: string) => {
+      const lines = (rest + chunk).split("\n");
+      rest = lines.pop() ?? "";
+      for (const line of lines) {
+        commands.push(line);
+        if (line.startsWith("configFile=")) configFile = line.slice("configFile=".length);
+        if (line === "start") {
+          const log = readIniString(/^file=(.*)$/m.exec(readFileSync(configFile, "utf8"))![1].trim());
+          setTimeout(() => appendFileSync(log, "[2026-10-19T12:00:00] DEBUG: connected to server\r\n"), 50);
+        }
+        socket.write("ok\n");
+      }
+    });
+  });
+  await new Promise<void>((r) => server.listen(pipe, r));
+  return { pipe, commands, close: () => new Promise<void>((r) => server.close(() => r())) };
+}
+
+test("laptop client runs through the Deskflow service when it answers", async () => {
+  const svc = await fakeService();
+  try {
+    const statuses: ClientStatus[] = [];
+    const warnings: string[] = [];
+    const c = new DeskflowClient({ ...paths(), servicePipe: svc.pipe }, (s) => statuses.push({ ...s }), (m) => warnings.push(m));
+    await c.start();
+    assert.equal(c.status.engine, "running");
+    for (let i = 0; i < 40 && !c.status.connected; i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(c.status.connected, true, "connection read from the core's log file");
+    await c.stop();
+    assert.equal(c.status.engine, "stopped");
+    assert.deepEqual(warnings, []);
+    assert.deepEqual(
+      svc.commands.filter((l) => l !== "noop").map((l) => l.replace(/=.*/, "=")),
+      ["configFile=", "start", "stop"],
+    );
+    const conf = svc.commands.find((l) => l.startsWith("configFile="))!.slice("configFile=".length);
+    assert.match(conf, /deskflow-client\.conf$/);
+    // The service's Deskflow would open a console window for each hook; they go through the hidden runner.
+    assert.match(readFileSync(conf, "utf8"), /enterCommand=".*wscript\.exe \/\/B \/\/Nologo .*notify-hidden\.vbs node notify\.mjs 47820 enter token"/);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("laptop client without the service starts Deskflow itself and says what admin windows will miss", async () => {
+  process.env.FAKE_DESKFLOW = "ok";
+  const missing = process.platform === "win32" ? "\\\\.\\pipe\\kvm-test-nobody" : join(tmpdir(), "kvm-test-nobody.sock");
+  const warnings: string[] = [];
+  const c = new DeskflowClient({ ...paths(), servicePipe: missing }, () => {}, (m) => warnings.push(m));
+  await c.start();
+  for (let i = 0; i < 40 && !c.status.connected; i++) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(c.status.connected, true);
+  await c.stop();
+  await c.start();
+  await c.stop();
+  assert.equal(warnings.length, 1, "warned once");
+  assert.match(warnings[0], /admin.*enable-deskflow/);
 });

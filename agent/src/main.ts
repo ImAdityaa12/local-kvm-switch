@@ -21,6 +21,7 @@ import { EngineError, type AudioEngine, type InputEngine, type InputReport } fro
 import { DESKFLOW_SERVER_PORT, DESKFLOW_TUNNEL_PORT } from "./deskflow/config.ts";
 import { DeskflowClient, DeskflowServerInput, type CursorEvent, type DeskflowPaths } from "./deskflow/engines.ts";
 import { preflight } from "./deskflow/preflight.ts";
+import { DAEMON_PIPE, daemonRequest, daemonRunning } from "./deskflow/daemon.ts";
 import { NullAudio } from "./null-audio.ts";
 import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudio, MIC_SEND_PORT, MIC_TUNNEL_PORT } from "./audio/engine.ts";
 import { helperPath } from "./audio/helper.ts";
@@ -170,6 +171,8 @@ function deskflowPaths(): DeskflowPaths {
     exe: values.deskflow!,
     dir: join(dir, "deskflow"),
     notifyCommand: (event) => [process.execPath.replace(/\\/g, "/"), notifyScript, String(port), event, tokenFile.replace(/\\/g, "/")],
+    // The laptop's client runs through the Deskflow service when it is on, so admin windows take input.
+    servicePipe: machine === "laptop" && process.platform === "win32" ? DAEMON_PIPE : undefined,
   };
 }
 
@@ -220,7 +223,7 @@ async function buildReal(): Promise<Built> {
     client = new DeskflowClient(paths, (st, error) => {
       report({ target: st.entered ? "laptop" : "gaming-pc", engine: st.engine, hooksActive: st.engine === "running", clientConnected: st.connected }, error);
       link.emit({ op: "input.status", ...st });
-    });
+    }, (m) => store.log("warn", m));
     const c = client;
     cursorHandler = (e) => c.cursor(e);
     input = {
@@ -341,8 +344,11 @@ async function buildReal(): Promise<Built> {
   }, 15_000);
 
   store.log("info", `Agent started as the ${machine === "gaming-pc" ? "gaming PC" : "laptop"}.`);
+  // A Deskflow the service still runs from before (an earlier agent, or the Deskflow app's settings) is ended.
+  const viaService = paths.servicePipe !== undefined && (await daemonRunning(paths.servicePipe));
+  if (viaService) await daemonRequest(paths.servicePipe!, ["stop"]).catch(() => {});
   // Say early what would make switching fail later.
-  await preflight(paths.exe, [], (m) => store.log("info", m)).catch((e) => {
+  await preflight(paths.exe, [], (m) => store.log("info", m), viaService).catch((e) => {
     if (e instanceof EngineError) store.log("warn", `${e.detail.message} ${e.detail.hint ?? ""}`.trim());
   });
   return {
