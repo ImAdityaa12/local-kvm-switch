@@ -232,7 +232,7 @@ function NotConnected({ status }: { status: ConnectionStatus }) {
           <code>npm run agent:sim</code>
         </pre>
         <p className="mt-6">
-          The agent prints a link like <span className="font-medium">localhost:3000/#agent=…&amp;token=…</span>. The token stays in this browser tab; it is never sent to a web server.
+          The agent prints a link like <span className="font-medium">localhost:7999/#agent=…&amp;token=…</span>. The token stays in this browser tab; it is never sent to a web server.
         </p>
       </section>
     </main>

@@ -36,7 +36,7 @@ Simulated (one machine, no Deskflow needed):
 ```bash
 npm install
 npm run agent:sim     # terminal 1: prints a dashboard link with a one-time token
-npm run dev           # terminal 2: dashboard on http://127.0.0.1:3000
+npm run dev           # terminal 2: dashboard on http://127.0.0.1:7999
 ```
 
 Real (two machines, Deskflow 1.27 installed): see [`docs/phase1-testing.md`](docs/phase1-testing.md).
@@ -49,7 +49,7 @@ node agent/src/main.ts --machine laptop
 Open the link the agent prints. The token travels in the URL fragment, is moved into this tab's
 `sessionStorage`, and is removed from the address bar.
 
-Agent options: `--port 47820`, `--dashboard http://localhost:3000`, `--unpaired` (start without a
+Agent options: `--port 47820`, `--dashboard http://localhost:7999`, `--unpaired` (start without a
 paired laptop to try pairing), `--no-endpoint` (laptop without a virtual microphone).
 
 The yellow bar in simulated mode can drop the laptop or remove its virtual microphone, so the failure
