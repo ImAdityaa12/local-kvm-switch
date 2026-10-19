@@ -21,8 +21,19 @@ export interface Simulation {
   setEndpointPresent(present: boolean): void;
 }
 
+/** Laptop and Gaming PC modes (mode.ts on the gaming PC; a request to it on the laptop). */
+export interface ModeControl {
+  set(mode: Machine): Promise<void>;
+  /** The cursor came home by hotkey; returns true when this finishes the return to Gaming PC mode. */
+  cursorHome?(): boolean;
+  /** The other machine went away. */
+  peerLost?(): void;
+}
+
 export interface ControllerDeps {
   store: Store;
+  /** Set later than the controller is built, so it can run the controller's own commands. */
+  mode?: () => ModeControl | null;
   input: InputEngine;
   audio: AudioEngine;
   peer: { onLink(cb: (online: boolean, error?: AgentError) => void): void };
@@ -93,7 +104,8 @@ export class Controller {
       const s = this.#d.store.state.input;
       const owner = this.#d.store.state.agent.machine === "gaming-pc";
       if (owner && s.target === "gaming-pc" && s.hooksActive && s.pending === null && s.engine === "running") {
-        this.#serialSwitch("gaming-pc").catch(() => {});
+        // In Laptop mode the return also brings the monitor and audio home.
+        if (!this.#d.mode?.()?.cursorHome?.()) this.#serialSwitch("gaming-pc").catch(() => {});
       }
     });
 
@@ -120,6 +132,11 @@ export class Controller {
   async handle(cmd: Command): Promise<void> {
     const { store } = this.#d;
     switch (cmd.type) {
+      case "mode.set": {
+        const mode = this.#d.mode?.();
+        if (!mode) throw new EngineError({ code: "not-supported", message: "This agent cannot switch modes." });
+        return mode.set(cmd.mode);
+      }
       case "input.setTarget":
         return this.#serialSwitch(cmd.target);
       case "input.returnLocal":
@@ -280,6 +297,7 @@ export class Controller {
         store.log("warn", "Returning keyboard and mouse to the Gaming PC");
         this.#serialSwitch("gaming-pc").catch(() => {});
       }
+      this.#d.mode?.()?.peerLost?.();
     }
   }
 

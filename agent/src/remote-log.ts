@@ -8,7 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { neon } from "@neondatabase/serverless";
 
-export type LogSource = "agent" | "deskflow" | "audio" | "crash";
+export type LogSource = "agent" | "deskflow" | "audio" | "display" | "crash";
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 interface Entry {

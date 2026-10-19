@@ -26,16 +26,18 @@ export function trayView(s: AgentState): TrayView {
   const onGamingPc = s.agent.machine === "gaming-pc";
   const peerOnline = s.peer.link === "online";
   const remote = s.input.target === "laptop";
-  const canReturn = remote || s.input.hooksActive || s.input.pending !== null;
+  const modePending = s.mode?.pending ?? null;
+  const pending = s.input.pending?.target ?? modePending?.target ?? null;
+  const canReturn = remote || s.input.hooksActive || pending !== null;
   // Either machine can start the switch; the gaming PC presses the hotkey itself.
   const switchLabel = onGamingPc ? "Switch to laptop" : "Take keyboard and mouse";
-  const base = { switchLabel, canReturn, canSwitch: peerOnline && !remote && s.input.pending === null };
-  if (s.input.pending?.target === "laptop") {
+  const base = { switchLabel, canReturn, canSwitch: peerOnline && !remote && pending === null };
+  if (pending === "laptop") {
     // Only when pressing it for the user did not work.
-    const hotkey = s.input.pending.step === "press-hotkey" && s.input.hotkeys ? `: press ${s.input.hotkeys.toLaptop}` : "";
+    const hotkey = s.input.pending?.step === "press-hotkey" && s.input.hotkeys ? `: press ${s.input.hotkeys.toLaptop}` : "";
     return { ...base, icon: "busy", status: `Switching to the laptop${hotkey}` };
   }
-  if (s.input.pending) return { ...base, icon: "busy", status: "Returning to the Gaming PC" };
+  if (pending) return { ...base, icon: "busy", status: "Returning to the Gaming PC" };
   if (remote) return { ...base, icon: "remote", status: onGamingPc ? "Laptop has the keyboard and mouse" : "This laptop has the keyboard and mouse" };
   if (!peerOnline) {
     const other = onGamingPc ? "Laptop" : "Gaming PC";

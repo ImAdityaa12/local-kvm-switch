@@ -86,6 +86,49 @@ export interface InputState {
   error?: AgentError;
 }
 
+/** Monitor input as the monitor reports it (MCCS VCP 0x60). */
+export type MonitorInput = "hdmi1" | "hdmi2";
+
+/** Windows display layout on the laptop: Extend, or PC screen only ("internal"). */
+export type DisplayTopology = "extend" | "internal" | "clone" | "external" | "unknown";
+
+/** One part of a mode switch, in the order it runs. */
+export type ModeStepId = "laptop-display" | "monitor" | "input" | "laptop-audio" | "microphone";
+
+/**
+ * done: confirmed. unconfirmed: sent, but its effect could not be checked.
+ * skipped: not attempted, with the reason in detail.
+ */
+export type ModeStepStatus = "waiting" | "running" | "done" | "unconfirmed" | "failed" | "skipped";
+
+export interface ModeStep {
+  id: ModeStepId;
+  status: ModeStepStatus;
+  detail?: string;
+}
+
+/**
+ * Laptop mode and Gaming PC mode switch the monitor input, the laptop's display
+ * layout, the keyboard and mouse, and both audio routes together. The gaming PC
+ * runs the switch; the laptop shows the same state.
+ */
+export interface ModeState {
+  /** The last mode whose required steps all completed; null after a switch that stopped part way. */
+  current: Machine | null;
+  /** The switch in progress. */
+  pending: { target: Machine; since: number } | null;
+  /** Steps of the switch in progress, or of the last one. */
+  target: Machine | null;
+  steps: ModeStep[];
+  /** What the monitor last reported as its input; null when unknown. */
+  monitor: { input: MonitorInput | null; at: number; via?: "usb" | "hdmi" } | null;
+  /** Whether this gaming PC can switch the monitor at all (its USB device or DDC/CI answered). */
+  monitorControl: boolean;
+  /** The laptop's display layout as the laptop last reported it; null when unknown. */
+  laptopDisplay: DisplayTopology | null;
+  error?: AgentError;
+}
+
 export type RouteId = "laptopToPc" | "micToLaptop";
 
 export type RouteStatus = "off" | "starting" | "streaming" | "reconnecting" | "error";
@@ -150,6 +193,8 @@ export interface AgentState {
     lanAddress: string | null;
   };
   peer: PeerState;
+  /** Absent from agents older than mode switching. */
+  mode?: ModeState;
   input: InputState;
   audio: {
     laptopToPc: RouteState;
@@ -162,6 +207,8 @@ export interface AgentState {
 // ---- Client → agent ----
 
 export type Command =
+  /** Laptop or Gaming PC mode: monitor, laptop display, input and audio together. */
+  | { type: "mode.set"; mode: Machine }
   | { type: "input.setTarget"; target: Machine }
   | { type: "input.returnLocal" }
   | { type: "audio.setEnabled"; route: RouteId; enabled: boolean }

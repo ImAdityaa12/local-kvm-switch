@@ -11,7 +11,7 @@
 
 import net from "node:net";
 import tls from "node:tls";
-import type { AgentError, AudioFormat, InputEngineStatus, Machine, RouteId } from "../../../lib/protocol/index.ts";
+import type { AgentError, AudioFormat, DisplayTopology, InputEngineStatus, Machine, ModeState, ModeStepId, ModeStepStatus, RouteId } from "../../../lib/protocol/index.ts";
 import { EngineError } from "../engines.ts";
 import { makeRateLimiter } from "../rate-limit.ts";
 import { frameChannel, type FrameChannel } from "./frames.ts";
@@ -31,12 +31,20 @@ export type PeerRequest =
   /** Laptop → gaming PC: switch the keyboard and mouse to the laptop, or give them back. */
   | { op: "input.take" }
   | { op: "input.return" }
+  /** Laptop → gaming PC: switch to Laptop or Gaming PC mode (mode.ts). */
+  | { op: "mode.set"; mode: Machine }
+  /** Gaming PC → laptop: set the laptop's display layout; answered once Windows reports it. */
+  | { op: "display.setTopology"; topology: "extend" | "internal" }
   | { op: "audio.start"; route: RouteId; volume?: number }
   | { op: "audio.stop"; route: RouteId }
   | { op: "audio.volume"; route: "micToLaptop"; volume: number };
 
 export type PeerEvent =
   | { op: "input.status"; engine: InputEngineStatus; connected: boolean; entered: boolean }
+  /** Gaming PC → laptop: the mode switch state, so the laptop's dashboard shows the same steps. */
+  | { op: "mode.status"; mode: ModeState }
+  /** Laptop → gaming PC: the laptop's current display layout. */
+  | { op: "display.status"; topology: DisplayTopology }
   /** Laptop → gaming PC: the virtual microphone the laptop can feed. */
   | { op: "audio.endpoint"; present: boolean; name: string | null; isDefault: boolean | null }
   /** Laptop → gaming PC: health of the mic player on the laptop. */
@@ -77,6 +85,8 @@ function parseRequest(m: Record<string, unknown>): PeerRequest | null {
   const body = m.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") return null;
   if (body.op === "input.prepare" || body.op === "input.release" || body.op === "input.take" || body.op === "input.return") return { op: body.op };
+  if (body.op === "mode.set" && (body.mode === "laptop" || body.mode === "gaming-pc")) return { op: "mode.set", mode: body.mode };
+  if (body.op === "display.setTopology" && (body.topology === "extend" || body.topology === "internal")) return { op: "display.setTopology", topology: body.topology };
   const route = body.route === "laptopToPc" || body.route === "micToLaptop" ? body.route : null;
   const volume = typeof body.volume === "number" && body.volume >= 0 && body.volume <= 1 ? body.volume : undefined;
   if (body.op === "audio.start" && route) return { op: "audio.start", route, volume };
@@ -100,8 +110,60 @@ function shortText(v: unknown, max: number): string | null {
   return typeof v === "string" ? v.slice(0, max) : null;
 }
 
+const TOPOLOGIES: DisplayTopology[] = ["extend", "internal", "clone", "external", "unknown"];
+const STEP_IDS: ModeStepId[] = ["laptop-display", "monitor", "input", "laptop-audio", "microphone"];
+const STEP_STATUSES: ModeStepStatus[] = ["waiting", "running", "done", "unconfirmed", "failed", "skipped"];
+
+function machineOrNull(v: unknown): Machine | null | undefined {
+  return v === null ? null : v === "laptop" || v === "gaming-pc" ? v : undefined;
+}
+
+/** Rebuilds a mode state from the wire, keeping only known fields and values. */
+export function parseModeState(v: unknown): ModeState | null {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") return null;
+  const current = machineOrNull(o.current);
+  const target = machineOrNull(o.target);
+  if (current === undefined || target === undefined || !Array.isArray(o.steps) || o.steps.length > 8) return null;
+  const steps = o.steps.flatMap((s: Record<string, unknown>) =>
+    s && STEP_IDS.includes(s.id as ModeStepId) && STEP_STATUSES.includes(s.status as ModeStepStatus)
+      ? [{ id: s.id as ModeStepId, status: s.status as ModeStepStatus, detail: shortText(s.detail, 300) ?? undefined }]
+      : [],
+  );
+  const p = o.pending as Record<string, unknown> | null;
+  const pendingTarget = machineOrNull(p?.target);
+  const pending = p && pendingTarget && typeof p.since === "number" ? { target: pendingTarget, since: p.since } : null;
+  const mon = o.monitor as Record<string, unknown> | null;
+  const monitor: ModeState["monitor"] =
+    mon && typeof mon.at === "number"
+      ? {
+          input: mon.input === "hdmi1" || mon.input === "hdmi2" ? mon.input : null,
+          at: mon.at,
+          via: mon.via === "usb" || mon.via === "hdmi" ? mon.via : undefined,
+        }
+      : null;
+  const e = o.error as Record<string, unknown> | undefined;
+  return {
+    current,
+    pending,
+    target,
+    steps,
+    monitor,
+    monitorControl: o.monitorControl === true,
+    laptopDisplay: TOPOLOGIES.includes(o.laptopDisplay as DisplayTopology) ? (o.laptopDisplay as DisplayTopology) : null,
+    error: e && typeof e.message === "string" ? { code: "internal", message: e.message.slice(0, 300), hint: shortText(e.hint, 300) ?? undefined } : undefined,
+  };
+}
+
 function parseEvent(m: Record<string, unknown>): PeerEvent | null {
   const b = m.body as Record<string, unknown> | undefined;
+  if (b?.op === "mode.status") {
+    const mode = parseModeState(b.mode);
+    return mode ? { op: "mode.status", mode } : null;
+  }
+  if (b?.op === "display.status") {
+    return TOPOLOGIES.includes(b.topology as DisplayTopology) ? { op: "display.status", topology: b.topology as DisplayTopology } : null;
+  }
   if (b?.op === "audio.endpoint") {
     if (typeof b.present !== "boolean") return null;
     return {

@@ -28,6 +28,17 @@ Follow the parts in order. Parts 1–3 are done once; Part 4 is what you do each
    machine. If the Deskflow app is open, the agent closes it when you switch. You never need to open
    or configure the Deskflow app.
 
+### On the gaming PC only (the monitor)
+
+- **Plug the monitor's USB cable** (USB-B at the monitor, USB-A on the PC) **into the gaming PC**, and
+  leave it there. The gaming PC switches the monitor between HDMI 1 (gaming PC) and HDMI 2 (laptop)
+  through it.
+- **Install Gigabyte OSD Sidekick** on the gaming PC (from the G24F 2 support page). The agent uses the
+  USB driver it installs; you don't need to open Sidekick. To check: Device Manager → *libusb-win32
+  devices* → **USB 2.0 BILLBOARD**.
+- If the USB cable or Sidekick is missing, the agent tries the HDMI cable instead (DDC/CI), which may
+  only work while the gaming PC is on screen. Otherwise switch the monitor with its own Input button.
+
 ### On the laptop only
 
 5. **VB-CABLE** (makes the IEM mic appear as a microphone on the laptop):
@@ -169,24 +180,47 @@ To stop, press **Ctrl+C**.
 
 ## Part 5: Use it
 
-Audio is controlled from the **gaming PC dashboard**. The keyboard and mouse can be switched from
-either machine.
+Audio devices are chosen on the **gaming PC dashboard**. Switching modes works from either machine.
 
-### Keyboard and mouse
+### Laptop mode and Gaming PC mode
 
-1. On the gaming PC, click **Laptop** (or **Switch to laptop** in the tray menu). It shows: *Asking
-   the laptop to get ready* → *Starting Deskflow* → *Moving the cursor to the laptop*, and the cursor
-   moves to the laptop on its own; the Laptop half turns green.
+**Laptop mode** does five things, in this order, and the dashboard lists each one with what happened
+(*Done*, *Sent, not confirmed*, *Failed* or *Skipped*, with the reason):
 
-   **From the laptop:** use its own touchpad to click **Take the keyboard and mouse** on the laptop's
+1. The laptop's display layout → **Extend**.
+2. The monitor → **HDMI 2**. *Done* means the monitor itself reported HDMI 2.
+3. Keyboard and mouse → the laptop.
+4. Laptop audio → your IEM on the gaming PC.
+5. Gaming PC microphone → the laptop.
+
+If step 1, 2 or 3 fails, the switch stops there. If the keyboard and mouse can't move, the monitor
+goes back to HDMI 1, so the gaming PC keeps its screen. Audio problems are shown but don't stop the
+switch.
+
+**Gaming PC mode** reverses it:
+
+1. Keyboard and mouse back.
+2. Both audio routes off.
+3. Monitor → HDMI 1.
+4. The laptop → **PC screen only**. This happens only once the monitor has confirmed HDMI 1;
+   otherwise the laptop stays in Extend, so the monitor still shows something. The laptop's own
+   screen stays on in both modes.
+
+**To switch:**
+
+1. On the gaming PC, click **Laptop** (or **Switch to laptop** in the tray menu). The cursor moves to
+   the laptop on its own; the Laptop half turns green.
+
+   **From the laptop:** use its own touchpad to click **Switch to Laptop mode** on the laptop's
    dashboard (or **Take keyboard and mouse** in the laptop's tray menu). The gaming PC runs the same
-   switch without anyone touching it.
+   switch, and the laptop's dashboard shows the same steps.
 2. If it stops at **Press Ctrl+Alt+Left**, press it on the gaming PC keyboard, or move the cursor off
    the left edge of the gaming PC's screen (the laptop sits to its left). This happens when a window
    that runs as admin has focus on the gaming PC, because Windows then ignores the key press the agent
    sends for you.
-3. Press **Ctrl+Alt+Right**, click **Return to Gaming PC**, or on the laptop click **Give input back
-   to Gaming PC** to come back. Moving to the edge of
+3. Press **Ctrl+Alt+Right**, or click **Gaming PC mode** (top right, on either dashboard), or
+   **Return to Gaming PC** in the tray menu. Each one runs the whole of Gaming PC mode, monitor
+   included. If the laptop disconnects, the gaming PC does the same on its own. Moving to the edge of
    the laptop's screen never switches back on its own. The dashboard shows
    **Input engine: Not running** and **Global input hooks: None installed**, and the log says
    *Local input confirmed. Input sharing stopped, no hooks installed.* That message is normal here.
@@ -219,6 +253,9 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 | "Deskflow was not found at …" | Install `deskflow-1.27.0-win-x64.msi` on **that** machine. If installed elsewhere, add `--deskflow "C:\path\to\deskflow-core.exe"` to the agent command. A message starting with the other machine's name came from the other machine. |
 | "The Deskflow service is already running Deskflow" (often right after a restart; gaming PC) | In the project folder run `npm.cmd run autostart -- disable-deskflow` and click **Yes**. Or by hand: `services.msc` → **Deskflow** → **Stop**, and **Startup type** → **Disabled**. |
 | On the laptop the keyboard and mouse stop working in Device Manager, Task Manager, an admin window, a permission (UAC) prompt or the lock screen, or the laptop's log says *The Deskflow service is off* | On the laptop, in the project folder, run `npm.cmd run autostart -- enable-deskflow` and click **Yes**. Or by hand: `services.msc` → **Deskflow** → **Startup type** → **Automatic**, then **Start**. It takes effect from the next switch to the laptop. |
+| Laptop mode shows **Monitor input: Skipped** ("This PC cannot switch the monitor") | The gaming PC found neither the monitor's USB device nor a DDC/CI answer. Check the monitor's USB cable is in the gaming PC and OSD Sidekick is installed (Part 1, gaming PC only), then restart the gaming PC agent. Meanwhile, switch the monitor with its Input button. |
+| **Monitor input: Failed** or *Sent, not confirmed* | Use the monitor's Input button. In Gaming PC mode the laptop stays in Extend so the monitor still has a picture. Send the gaming PC's log (`--source display` shows the monitor commands and answers). |
+| "The display helper is not built" | Run `npm.cmd run build:audio` on that machine (it builds `kvm-display.exe` with the audio helper), then restart the agent. |
 | "The Deskflow app is already running Deskflow" | The agent closes the app by itself, so this means it could not. Right-click the Deskflow tray icon → **Quit**, and Task Manager → **Startup apps** → **Deskflow** → **Disable**. |
 | Clicking **Laptop** never reaches *Press Ctrl+Alt+Left* (or Ctrl+Alt+Left does nothing), and the laptop's log says *Local input confirmed…* right after the switch starts | The laptop is running an older version that stopped its own Deskflow straight away. Update the laptop (`git pull`, Part 2) and restart the laptop agent. |
 | Laptop shows **Unreachable** | Same network? Correct `--bind` address on the gaming PC? Allowed Node.js through the firewall for **Private** networks? Network set to **Private**, not Public, in Windows settings? |
@@ -259,7 +296,7 @@ when it is back. Like the Deskflow log file, nothing sent contains keystrokes or
 
 ---
 
-## Building the audio helper (only if `kvm-audio.exe` is missing)
+## Building the audio helper (only if `kvm-audio.exe` or `kvm-display.exe` is missing)
 
 1. Install Rust: https://rustup.rs (per user, no admin).
 2. Either install Visual Studio Build Tools (MSVC), **or** download the WinLibs MinGW-w64 UCRT zip from
