@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commandLine, iniString, serverLayout, settingsIni } from "../src/deskflow/config.ts";
 import { conflictDetail } from "../src/deskflow/preflight.ts";
-import { DeskflowClient, DeskflowServerInput, crashed, lastError, type ClientStatus, type DeskflowPaths } from "../src/deskflow/engines.ts";
+import { DeskflowClient, DeskflowServerInput, LaptopInput, crashed, lastError, type ClientStatus, type DeskflowPaths } from "../src/deskflow/engines.ts";
+import { pressScript } from "../src/deskflow/hotkey.ts";
 import type { InputReport } from "../src/engines.ts";
 
 /** Reference reader for a quoted QSettings INI string (the subset we emit). */
@@ -219,4 +220,88 @@ test("laptop client without the service starts Deskflow itself and says what adm
   await c.stop();
   assert.equal(warnings.length, 1, "warned once");
   assert.match(warnings[0], /admin.*enable-deskflow/);
+});
+
+test("server engine: a click presses the hotkey itself, and the switch completes without the user", async () => {
+  process.env.FAKE_DESKFLOW = "ok";
+  const pressed: string[] = [];
+  const p = paths();
+  // Stands in for Deskflow acting on the hotkey: the cursor leaves the gaming PC.
+  const e: DeskflowServerInput = new DeskflowServerInput(p, { request: async () => {} }, { pressHotkey: async (k) => void (pressed.push(k), setTimeout(() => e.cursor("leave"), 20)) });
+  const reports: InputReport[] = [];
+  e.onReport((r) => reports.push({ ...r }));
+  await e.activateRemote();
+  assert.deepEqual(pressed, ["Ctrl+Alt+Left"]);
+  assert.equal(reports.at(-1)!.target, "laptop");
+  assert.ok(reports.some((r) => r.step === "moving-cursor"));
+  assert.ok(!reports.some((r) => r.step === "press-hotkey"), "the user is not asked to press it");
+  await e.deactivate();
+});
+
+test("server engine: when pressing the hotkey does not move the cursor, the user is asked to press it", async () => {
+  process.env.FAKE_DESKFLOW = "ok";
+  for (const press of [async () => {}, async () => Promise.reject(new Error("no powershell"))]) {
+    const e = new DeskflowServerInput(paths(), { request: async () => {} }, { pressHotkey: press, pressFallbackMs: 100 });
+    const reports: InputReport[] = [];
+    e.onReport((r) => reports.push({ ...r }));
+    const done = e.activateRemote();
+    for (let i = 0; i < 60 && reports.at(-1)?.step !== "press-hotkey"; i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(reports.at(-1)!.step, "press-hotkey");
+    e.cursor("leave");
+    await done;
+    assert.equal(reports.at(-1)!.target, "laptop");
+    await e.deactivate();
+  }
+});
+
+test("the hotkey press holds the modifiers around the arrow and releases them in reverse", () => {
+  const lines = pressScript("Ctrl+Alt+Left").split("\n").slice(1);
+  assert.deepEqual(
+    lines.map((l) => /keybd_event\((\d+), (\d+), (\d+),/.exec(l)!.slice(1).map(Number)),
+    [
+      [0x11, 0x1d, 0],
+      [0x12, 0x38, 0],
+      [0x25, 0x4b, 1],
+      [0x25, 0x4b, 3],
+      [0x12, 0x38, 2],
+      [0x11, 0x1d, 2],
+    ],
+  );
+  assert.throws(() => pressScript("Ctrl+Q"), /Cannot press the key "Q"/);
+});
+
+test("laptop input: taking asks the gaming PC to switch, giving back asks it to return and stops the client", async () => {
+  process.env.FAKE_DESKFLOW = "ok";
+  const asked: { op: string; timeoutMs?: number }[] = [];
+  const client = new DeskflowClient(paths(), (st, err) => li.clientStatus(st, err));
+  const li: LaptopInput = new LaptopInput(client, { request: async (r, timeoutMs) => void asked.push({ op: r.op, timeoutMs }) });
+  const reports: InputReport[] = [];
+  li.onReport((r) => reports.push({ ...r }));
+
+  await li.activateRemote();
+  assert.deepEqual(asked, [{ op: "input.take", timeoutMs: 65_000 }]);
+  assert.ok(li.switchTimeoutMs >= 65_000, "the laptop waits as long as the gaming PC may");
+
+  // The gaming PC then starts the client here (input.prepare).
+  await client.start();
+  for (let i = 0; i < 40 && !reports.at(-1)?.clientConnected; i++) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(reports.at(-1)!.step, "moving-cursor");
+  client.cursor("enter");
+  assert.equal(reports.at(-1)!.target, "laptop");
+  assert.equal(reports.at(-1)!.step, undefined);
+
+  await li.deactivate();
+  assert.equal(asked.at(-1)!.op, "input.return");
+  assert.equal(client.status.engine, "stopped");
+  assert.equal(reports.at(-1)!.target, "gaming-pc");
+  assert.equal(reports.at(-1)!.hooksActive, false);
+});
+
+test("laptop input: giving back still stops the client when the gaming PC cannot be reached", async () => {
+  process.env.FAKE_DESKFLOW = "ok";
+  const client = new DeskflowClient(paths(), () => {});
+  const li = new LaptopInput(client, { request: async () => Promise.reject(new Error("unreachable")) });
+  await client.start();
+  await li.deactivate();
+  assert.equal(client.status.engine, "stopped");
 });

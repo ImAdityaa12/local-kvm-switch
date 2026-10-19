@@ -28,6 +28,9 @@ const RECONNECT_MAX_MS = 10_000;
 export type PeerRequest =
   | { op: "input.prepare" }
   | { op: "input.release" }
+  /** Laptop → gaming PC: switch the keyboard and mouse to the laptop, or give them back. */
+  | { op: "input.take" }
+  | { op: "input.return" }
   | { op: "audio.start"; route: RouteId; volume?: number }
   | { op: "audio.stop"; route: RouteId }
   | { op: "audio.volume"; route: "micToLaptop"; volume: number };
@@ -73,7 +76,7 @@ const UNREACHABLE: AgentError = {
 function parseRequest(m: Record<string, unknown>): PeerRequest | null {
   const body = m.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") return null;
-  if (body.op === "input.prepare" || body.op === "input.release") return { op: body.op };
+  if (body.op === "input.prepare" || body.op === "input.release" || body.op === "input.take" || body.op === "input.return") return { op: body.op };
   const route = body.route === "laptopToPc" || body.route === "micToLaptop" ? body.route : null;
   const volume = typeof body.volume === "number" && body.volume >= 0 && body.volume <= 1 ? body.volume : undefined;
   if (body.op === "audio.start" && route) return { op: "audio.start", route, volume };
@@ -205,7 +208,7 @@ export class PeerLink {
     if (this.#o.machine === "laptop" && !this.#stopped) this.#scheduleDial(0);
   }
 
-  request(req: PeerRequest): Promise<void> {
+  request(req: PeerRequest, timeoutMs = REQUEST_TIMEOUT_MS): Promise<void> {
     const s = this.#session;
     if (!s || !s.peerName) return Promise.reject(new EngineError(UNREACHABLE));
     const id = String(++this.#seq);
@@ -213,7 +216,7 @@ export class PeerLink {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         reject(new EngineError({ ...UNREACHABLE, message: "The other agent did not answer in time" }));
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
       s.ch.send({ t: "req", id, body: req });
     });

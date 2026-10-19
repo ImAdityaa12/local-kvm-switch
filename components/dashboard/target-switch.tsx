@@ -69,7 +69,9 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
           <p className="text-2xl font-semibold tracking-[-0.02em]">
             Press <kbd>{input.hotkeys.toLaptop}</kbd> to move to the laptop
           </p>
-          <p className="max-w-[48ch] text-ink-2">Deskflow is running and the laptop is connected. Moving the cursor takes its hotkey; a click here cannot do it yet.</p>
+          <p className="max-w-[48ch] text-ink-2">
+            Deskflow is running and the laptop is connected, but pressing the hotkey for you did not move the cursor (Windows blocks this while a window that runs as admin has focus). Press it on this keyboard.
+          </p>
         </div>
       ) : null}
 
@@ -109,6 +111,7 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
 const STEP_TEXT: Record<SwitchStep, string> = {
   "waiting-for-laptop": "Asking the laptop to get ready",
   "starting-engine": "Starting Deskflow",
+  "moving-cursor": "Moving the cursor to the laptop",
   "press-hotkey": "Waiting for the hotkey",
   "stopping-engine": "Stopping Deskflow",
 };

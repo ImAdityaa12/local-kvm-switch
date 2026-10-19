@@ -17,9 +17,10 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION, isLanAddress, type AgentError, type Machine } from "../../lib/protocol/index.ts";
 import { Controller, type Pairing } from "./controller.ts";
-import { EngineError, type AudioEngine, type InputEngine, type InputReport } from "./engines.ts";
+import { EngineError, type AudioEngine, type InputEngine } from "./engines.ts";
 import { DESKFLOW_SERVER_PORT, DESKFLOW_TUNNEL_PORT } from "./deskflow/config.ts";
-import { DeskflowClient, DeskflowServerInput, type CursorEvent, type DeskflowPaths } from "./deskflow/engines.ts";
+import { DeskflowClient, DeskflowServerInput, LaptopInput, type CursorEvent, type DeskflowPaths } from "./deskflow/engines.ts";
+import { pressHotkey } from "./deskflow/hotkey.ts";
 import { preflight } from "./deskflow/preflight.ts";
 import { DAEMON_PIPE, daemonRequest, daemonRunning } from "./deskflow/daemon.ts";
 import { NullAudio } from "./null-audio.ts";
@@ -214,24 +215,20 @@ async function buildReal(): Promise<Built> {
   let client: DeskflowClient | null = null;
 
   if (machine === "gaming-pc") {
-    const server = new DeskflowServerInput(paths, { request: (r) => link.request(r) });
+    // A click presses the switch hotkey for the user (hotkey.ts); not in tests or off Windows.
+    const server = new DeskflowServerInput(paths, { request: (r) => link.request(r) }, process.platform === "win32" ? { pressHotkey } : {});
     cursorHandler = (e) => server.cursor(e);
     input = server;
   } else {
-    // The laptop does not choose the target; it runs the client when asked and can give input back.
-    let report: (r: InputReport, e?: AgentError) => void = () => {};
+    // The laptop runs the client when the gaming PC asks for it, and can itself ask the gaming PC to switch or return.
+    let laptopInput: LaptopInput | null = null;
     client = new DeskflowClient(paths, (st, error) => {
-      report({ target: st.entered ? "laptop" : "gaming-pc", engine: st.engine, hooksActive: st.engine === "running", clientConnected: st.connected }, error);
+      laptopInput?.clientStatus(st, error);
       link.emit({ op: "input.status", ...st });
     }, (m) => store.log("warn", m));
     const c = client;
     cursorHandler = (e) => c.cursor(e);
-    input = {
-      kind: "deskflow",
-      onReport: (cb) => (report = cb),
-      activateRemote: () => Promise.reject(new EngineError({ code: "not-supported", message: "Switch to the laptop from the gaming PC." })),
-      deactivate: () => c.stop(),
-    };
+    input = laptopInput = new LaptopInput(c, { request: (r, timeoutMs) => link.request(r, timeoutMs) });
   }
   store.update((s) => {
     s.input.hotkeys = input.hotkeys;
@@ -264,6 +261,13 @@ async function buildReal(): Promise<Built> {
       if (online) void laptopAudio?.announceEndpoint();
     },
     onRequest: async (req) => {
+      if (req.op === "input.take" || req.op === "input.return") {
+        // Both machines belong to the same person, so the laptop may switch on its own.
+        if (machine !== "gaming-pc") throw new EngineError({ code: "not-supported", message: "Only the gaming PC takes these requests." });
+        const who = store.state.peer.name ?? "The laptop";
+        store.log("info", req.op === "input.take" ? `${who} asked for the keyboard and mouse` : `${who} gave the keyboard and mouse back`);
+        return controller.handle(req.op === "input.take" ? { type: "input.setTarget", target: "laptop" } : { type: "input.returnLocal" });
+      }
       if (machine !== "laptop") throw new EngineError({ code: "not-supported", message: "Only the laptop takes these requests." });
       if (req.op === "audio.start" || req.op === "audio.stop" || req.op === "audio.volume") {
         if (!laptopAudio) throw new EngineError({ code: "engine-missing", message: "The audio helper is not built on the laptop.", hint: "Run npm run build:audio on the laptop." });

@@ -10,6 +10,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { AgentError, InputEngineStatus } from "../../../lib/protocol/index.ts";
 import { EngineError, type InputEngine, type InputReport } from "../engines.ts";
@@ -31,8 +32,12 @@ import {
 import { DaemonCore, daemonRunning } from "./daemon.ts";
 import { CoreProcess, type Core } from "./process.ts";
 import { preflight } from "./preflight.ts";
+import { remoteLog } from "../remote-log.ts";
 
 export type CursorEvent = "enter" | "leave";
+
+/** Give the server a moment with its new client before pressing the hotkey. */
+const PRESS_SETTLE_MS = 250;
 
 export interface DeskflowPaths {
   exe: string;
@@ -140,9 +145,16 @@ export class DeskflowServerInput implements InputEngine {
   /** Bumped by deactivate(), so an activation in flight knows it was cancelled. */
   #gen = 0;
 
-  constructor(paths: DeskflowPaths, peer: PeerControl) {
+  /** Presses a hotkey on this machine (hotkey.ts); without it the user presses it. */
+  #press: ((hotkey: string) => Promise<void>) | undefined;
+  /** How long after pressing the hotkey to wait for the cursor before asking the user to press it. */
+  #pressFallbackMs: number;
+
+  constructor(paths: DeskflowPaths, peer: PeerControl, opts: { pressHotkey?: (hotkey: string) => Promise<void>; pressFallbackMs?: number } = {}) {
     this.#p = paths;
     this.#peer = peer;
+    this.#press = opts.pressHotkey;
+    this.#pressFallbackMs = opts.pressFallbackMs ?? 3_000;
   }
 
   onReport(cb: (r: InputReport, e?: AgentError) => void): void {
@@ -186,8 +198,35 @@ export class DeskflowServerInput implements InputEngine {
     this.#report({ engine: "running", hooksActive: true });
 
     await connected;
-    this.#report({ clientConnected: true, step: "press-hotkey" });
-    await onLaptop;
+    cancelled();
+    this.#report({ clientConnected: true, step: this.#press ? "moving-cursor" : "press-hotkey" });
+    if (this.#press) {
+      // Press the hotkey for the user; if the cursor has not moved soon after, ask them to.
+      const press = this.#press;
+      let fallback: ReturnType<typeof setTimeout> | undefined;
+      const askUser = () => {
+        if (gen === this.#gen && this.#state.target !== "laptop") this.#report({ step: "press-hotkey" });
+      };
+      void delay(PRESS_SETTLE_MS)
+        .then(() => {
+          if (gen !== this.#gen) return;
+          return press(HOTKEYS.toLaptop).then(
+            () => void (fallback = setTimeout(askUser, this.#pressFallbackMs)),
+            (e: Error) => {
+              remoteLog.write("deskflow", "warn", `could not press ${HOTKEYS.toLaptop}: ${e.message}`);
+              askUser();
+            },
+          );
+        })
+        .catch(() => {});
+      try {
+        await onLaptop;
+      } finally {
+        clearTimeout(fallback);
+      }
+    } else {
+      await onLaptop;
+    }
     this.#report({ target: "laptop" });
   }
 
@@ -319,5 +358,59 @@ export class DeskflowClient {
 
   cursor(event: CursorEvent): void {
     if (this.#proc?.running) this.#set({ entered: event === "enter" });
+  }
+}
+
+export interface GamingPcControl {
+  request(req: { op: "input.take" } | { op: "input.return" }, timeoutMs?: number): Promise<void>;
+}
+
+/** A switch asked for on the laptop runs on the gaming PC, which may wait up to its own 60 s for the hotkey. */
+const TAKE_TIMEOUT_MS = 65_000;
+const RETURN_TIMEOUT_MS = 10_000;
+
+/**
+ * Laptop side of the input engine. The gaming PC owns the switch (it runs the
+ * server and the hotkey), but either machine can start it: taking input asks
+ * the gaming PC to switch to this laptop, giving it back asks it to return.
+ */
+export class LaptopInput implements InputEngine {
+  readonly kind = "deskflow" as const;
+  readonly hotkeys = HOTKEYS;
+  readonly switchTimeoutMs = TAKE_TIMEOUT_MS;
+  #client: DeskflowClient;
+  #pc: GamingPcControl;
+  #cb: (r: InputReport, e?: AgentError) => void = () => {};
+
+  constructor(client: DeskflowClient, pc: GamingPcControl) {
+    this.#client = client;
+    this.#pc = pc;
+  }
+
+  onReport(cb: (r: InputReport, e?: AgentError) => void): void {
+    this.#cb = cb;
+  }
+
+  /** Called with every status change of the laptop's Deskflow client. */
+  clientStatus(st: ClientStatus, error?: AgentError): void {
+    this.#cb(
+      {
+        target: st.entered ? "laptop" : "gaming-pc",
+        engine: st.engine,
+        hooksActive: st.engine === "running",
+        clientConnected: st.connected,
+        step: st.connected && !st.entered ? "moving-cursor" : st.engine === "starting" ? "starting-engine" : undefined,
+      },
+      error,
+    );
+  }
+
+  activateRemote(): Promise<void> {
+    return this.#pc.request({ op: "input.take" }, TAKE_TIMEOUT_MS);
+  }
+
+  async deactivate(): Promise<void> {
+    // Tell the gaming PC first, so it stops its server rather than waiting out a switch; stop the client either way.
+    await Promise.allSettled([this.#pc.request({ op: "input.return" }, RETURN_TIMEOUT_MS), this.#client.stop()]);
   }
 }

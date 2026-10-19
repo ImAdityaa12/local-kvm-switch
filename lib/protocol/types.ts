@@ -62,7 +62,7 @@ export interface PeerState {
 
 export type InputEngineStatus = "stopped" | "starting" | "running" | "stopping" | "error";
 
-export type SwitchStep = "waiting-for-laptop" | "starting-engine" | "press-hotkey" | "stopping-engine";
+export type SwitchStep = "waiting-for-laptop" | "starting-engine" | "moving-cursor" | "press-hotkey" | "stopping-engine";
 
 export interface Hotkeys {
   toLaptop: string;

@@ -206,10 +206,12 @@ export class Controller {
       return;
     }
     if (target === "laptop" && s.peer.link !== "online") {
+      // Either machine can start a switch to the laptop; name the other one.
+      const other = s.agent.machine === "laptop" ? "gaming PC" : "laptop";
       const error: AgentError =
         s.peer.link === "unpaired"
-          ? { code: "peer-unpaired", message: "No laptop is paired yet.", hint: "Pair the laptop first." }
-          : { code: "peer-unreachable", message: "The laptop is not reachable.", hint: "Check that the laptop agent is running and on the same network." };
+          ? { code: "peer-unpaired", message: s.agent.machine === "laptop" ? "This laptop is not paired with a gaming PC yet." : "No laptop is paired yet.", hint: "Pair the laptop first." }
+          : { code: "peer-unreachable", message: `The ${other} is not reachable.`, hint: `Check that the ${other} agent is running and on the same network.` };
       throw new EngineError(error);
     }
 

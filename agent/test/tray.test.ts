@@ -23,7 +23,7 @@ test("tray: grey on the gaming PC, and Switch to laptop is offered", () => {
   assert.equal(v.status, "Gaming PC has the keyboard and mouse");
   assert.equal(v.canSwitch, true);
   assert.equal(v.canReturn, false);
-  assert.match(v.switchLabel, /Ctrl\+Alt\+Left/);
+  assert.equal(v.switchLabel, "Switch to laptop");
 });
 
 test("tray: amber while waiting for the hotkey, with the key to press", () => {
@@ -48,11 +48,16 @@ test("tray: red when the laptop is unreachable, and switching is not offered", (
   assert.equal(v.canSwitch, false);
 });
 
-test("tray: the laptop never offers Switch, only Return while it has input", () => {
+test("tray: the laptop can take the keyboard and mouse, and offers Return while it has input", () => {
   const idle = trayView(state((s) => (s.agent.machine = "laptop")));
-  assert.equal(idle.switchLabel, "");
-  assert.equal(idle.canSwitch, false);
+  assert.equal(idle.switchLabel, "Take keyboard and mouse");
+  assert.equal(idle.canSwitch, true);
+  assert.equal(idle.canReturn, false);
+  const offline = trayView(state((s) => ((s.agent.machine = "laptop"), (s.peer = { link: "offline", name: "PC", pairing: null }))));
+  assert.equal(offline.canSwitch, false);
+  assert.equal(offline.status, "Gaming PC is not reachable");
   const remote = trayView(state((s) => ((s.agent.machine = "laptop"), (s.input.target = "laptop"))));
   assert.equal(remote.status, "This laptop has the keyboard and mouse");
   assert.equal(remote.canReturn, true);
+  assert.equal(remote.canSwitch, false);
 });

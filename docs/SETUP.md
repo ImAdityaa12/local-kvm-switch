@@ -138,13 +138,13 @@ of RAM, plus about 25 MB for Deskflow only while the laptop is in use.
 A **LAN KVM** dot appears in the notification area (bottom right; at first it may be hidden under
 the **^** arrow, so drag it onto the taskbar to keep it in view). Its colour says who has the keyboard
 and mouse: **grey** the gaming PC, **green** the laptop, **amber** switching, **red** the other
-machine is not reachable. Hover it for the details. Right-click it for **Switch to laptop**,
-**Return to Gaming PC** and **Open dashboard**; left-click it to open the dashboard. The icon needs
+machine is not reachable. Hover it for the details. Right-click it for **Switch to laptop** (on the
+laptop: **Take keyboard and mouse**), **Return to Gaming PC** and **Open dashboard**; left-click it to open the dashboard. The icon needs
 `npm.cmd run build:audio` (it is built with the audio helper) and goes away when the agent stops.
 
 You can also open the dashboard with the **LAN KVM** shortcut on the desktop or in the Start menu. It opens
-in a small window of its own; close it when you are done, and the agent keeps running. The laptop
-rarely needs it: switching is done from the gaming PC.
+in a small window of its own; close it when you are done, and the agent keeps running. On the laptop
+it is where you take the keyboard and mouse from the laptop's side.
 
 After `git pull`, run `npm.cmd run build` (and `npm.cmd run build:audio` if anything under `native/`
 changed) again, then run
@@ -169,15 +169,24 @@ To stop, press **Ctrl+C**.
 
 ## Part 5: Use it
 
-All controls are on the **gaming PC dashboard**.
+Audio is controlled from the **gaming PC dashboard**. The keyboard and mouse can be switched from
+either machine.
 
 ### Keyboard and mouse
 
-1. Click **Laptop**. It shows: *Asking the laptop to get ready* → *Starting Deskflow* →
-   **Press Ctrl+Alt+Left**.
-2. Press **Ctrl+Alt+Left**, or move the cursor off the left edge of the gaming PC's screen (the laptop
-   sits to its left). The cursor moves to the laptop; the Laptop half turns green.
-3. Press **Ctrl+Alt+Right** (or click **Return to Gaming PC**) to come back. Moving to the edge of
+1. On the gaming PC, click **Laptop** (or **Switch to laptop** in the tray menu). It shows: *Asking
+   the laptop to get ready* → *Starting Deskflow* → *Moving the cursor to the laptop*, and the cursor
+   moves to the laptop on its own; the Laptop half turns green.
+
+   **From the laptop:** use its own touchpad to click **Take the keyboard and mouse** on the laptop's
+   dashboard (or **Take keyboard and mouse** in the laptop's tray menu). The gaming PC runs the same
+   switch without anyone touching it.
+2. If it stops at **Press Ctrl+Alt+Left**, press it on the gaming PC keyboard, or move the cursor off
+   the left edge of the gaming PC's screen (the laptop sits to its left). This happens when a window
+   that runs as admin has focus on the gaming PC, because Windows then ignores the key press the agent
+   sends for you.
+3. Press **Ctrl+Alt+Right**, click **Return to Gaming PC**, or on the laptop click **Give input back
+   to Gaming PC** to come back. Moving to the edge of
    the laptop's screen never switches back on its own. The dashboard shows
    **Input engine: Not running** and **Global input hooks: None installed**, and the log says
    *Local input confirmed. Input sharing stopped, no hooks installed.* That message is normal here.

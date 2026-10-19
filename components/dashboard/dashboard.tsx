@@ -101,7 +101,7 @@ function Connected({
         </div>
       ) : null}
 
-      {state.agent.machine === "laptop" ? <LaptopInput state={state} /> : <TargetSwitch state={state} send={send} />}
+      {state.agent.machine === "laptop" ? <LaptopInput state={state} send={send} /> : <TargetSwitch state={state} send={send} />}
       {state.agent.machine === "laptop" ? <LaptopAudio /> : state.agent.engines.audio === "none" ? <AudioLater /> : <AudioSection state={state} send={send} now={now} />}
 
       <div className="mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
@@ -119,22 +119,55 @@ function Connected({
   );
 }
 
-/** On the laptop the target is chosen on the gaming PC; this shows what the laptop sees. */
-function LaptopInput({ state }: { state: AgentState }) {
+/** On the laptop: what the laptop sees, and taking the keyboard and mouse from here (the gaming PC runs the switch). */
+function LaptopInput({ state, send }: { state: AgentState; send: (c: Command) => Promise<unknown> }) {
   const { input, peer } = state;
   const here = input.target === "laptop";
+  const [asked, setAsked] = useState(false);
+  const taking = asked || input.pending?.target === "laptop";
+  const pcName = peer.name ?? "the gaming PC";
+  const take = async () => {
+    setAsked(true);
+    try {
+      await send({ type: "input.setTarget", target: "laptop" });
+    } finally {
+      setAsked(false);
+    }
+  };
   return (
     <section aria-labelledby="laptop-heading" className="rise" style={{ "--i": 1 } as React.CSSProperties}>
-      <div className={here ? "bg-live p-6 text-live-ink sm:p-10" : "bg-surface-1 p-6 sm:p-10"}>
+      <div className={here ? "bg-live p-6 text-live-ink sm:p-10" : taking ? "bg-live-soft p-6 sm:p-10" : "bg-surface-1 p-6 sm:p-10"}>
         <h1 id="laptop-heading" className="text-target leading-[0.92] font-semibold tracking-[-0.045em]">
-          {here ? "This laptop has the keyboard" : "Gaming PC has the keyboard"}
+          {here ? "This laptop has the keyboard" : taking ? "Taking the keyboard" : "Gaming PC has the keyboard"}
         </h1>
         <p className={here ? "mt-5 max-w-[52ch] text-lg opacity-90" : "mt-5 max-w-[52ch] text-lg text-ink-2"}>
           {here
-            ? `Input from ${peer.name ?? "the gaming PC"} is controlling this laptop.`
-            : "Switch to the laptop from the gaming PC's dashboard."}
-          {input.hotkeys ? ` ${input.hotkeys.toGamingPc} sends it back.` : ""}
+            ? `Input from ${pcName} is controlling this laptop.`
+            : taking
+              ? input.pending?.step === "moving-cursor"
+                ? `Connected. Moving the cursor here; if it has not arrived in a few seconds, press ${input.hotkeys?.toLaptop ?? "the hotkey"} on ${pcName}'s keyboard.`
+                : `Asking ${pcName} to switch to this laptop.`
+              : `Take them from here, or switch from ${pcName}'s dashboard or tray icon.`}
+          {here && input.hotkeys ? ` ${input.hotkeys.toGamingPc} sends it back.` : ""}
         </p>
+        {!here ? (
+          <button
+            type="button"
+            onClick={take}
+            disabled={taking || peer.link !== "online"}
+            className="press mt-8 h-12 bg-live px-6 text-lg font-semibold text-live-ink hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {taking ? (
+              <Status tone="idle" busy className="[&>span:first-child]:bg-current">
+                Switching
+              </Status>
+            ) : peer.link === "online" ? (
+              "Take the keyboard and mouse"
+            ) : (
+              `${pcName} is unreachable`
+            )}
+          </button>
+        ) : null}
       </div>
       {input.error ? <ErrorNote error={input.error} className="mt-2" /> : null}
       <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-5 bg-surface-1 px-5 py-5 sm:px-6 lg:grid-cols-3">

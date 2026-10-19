@@ -27,9 +27,11 @@ export function trayView(s: AgentState): TrayView {
   const peerOnline = s.peer.link === "online";
   const remote = s.input.target === "laptop";
   const canReturn = remote || s.input.hooksActive || s.input.pending !== null;
-  const switchLabel = onGamingPc ? (s.input.hotkeys ? `Switch to laptop (then ${s.input.hotkeys.toLaptop})` : "Switch to laptop") : "";
-  const base = { switchLabel, canReturn, canSwitch: onGamingPc && peerOnline && !remote && s.input.pending === null };
+  // Either machine can start the switch; the gaming PC presses the hotkey itself.
+  const switchLabel = onGamingPc ? "Switch to laptop" : "Take keyboard and mouse";
+  const base = { switchLabel, canReturn, canSwitch: peerOnline && !remote && s.input.pending === null };
   if (s.input.pending?.target === "laptop") {
+    // Only when pressing it for the user did not work.
     const hotkey = s.input.pending.step === "press-hotkey" && s.input.hotkeys ? `: press ${s.input.hotkeys.toLaptop}` : "";
     return { ...base, icon: "busy", status: `Switching to the laptop${hotkey}` };
   }
