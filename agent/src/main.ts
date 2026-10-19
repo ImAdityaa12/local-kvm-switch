@@ -40,6 +40,10 @@ import { SimAudio, SimInput, SimPairing, SimWorld } from "./sim/world.ts";
 
 const VERSION = "0.2.0";
 const DEFAULT_DESKFLOW = "C:\\Program Files\\Deskflow\\deskflow-core.exe";
+/** Laptop: how long after Extend a keyboard-and-mouse switch waits for the monitor to join the desktop. */
+const JOIN_WINDOW_MS = 30_000;
+/** At most this long, so input.prepare still answers inside the gaming PC's 10 s. Seen joining in 3–5 s. */
+const JOIN_WAIT_MS = 6_000;
 
 const { values } = parseArgs({
   options: {
@@ -225,6 +229,8 @@ async function buildReal(): Promise<Built> {
   const display = new DisplayHelper(displayHelperPath(repoRoot));
   if (!display.built) store.log("warn", "The display helper is not built, so the monitor and display layout cannot be switched. Run npm run build:audio.");
   const layout = displayLayout(display);
+  // Laptop: after Extend, the displays the desktop should span and until when to wait for them (see input.prepare).
+  let joining: { monitors: number; until: number } | null = null;
   store.update((s) => {
     s.mode = idleMode();
   });
@@ -288,7 +294,8 @@ async function buildReal(): Promise<Built> {
       }
       if (req.op === "display.setTopology") {
         if (machine !== "laptop") throw new EngineError({ code: "not-supported", message: "Only the laptop changes its display layout." });
-        const topology = await layout.set(req.topology);
+        const { topology, paths } = await layout.set(req.topology);
+        joining = topology === "extend" ? { monitors: paths, until: Date.now() + JOIN_WINDOW_MS } : null;
         store.update((s) => {
           if (s.mode) s.mode.laptopDisplay = topology;
         });
@@ -308,8 +315,17 @@ async function buildReal(): Promise<Built> {
         if (req.op === "audio.volume") return laptopAudio.setMicVolume(req.volume);
         return req.op === "audio.start" ? laptopAudio.start(req.route, req.volume) : laptopAudio.stop(req.route);
       }
-      if (req.op === "input.prepare") await client!.start();
-      else await client!.stop();
+      if (req.op === "input.prepare") {
+        // Deskflow reads the desktop's size once, as it starts, and can miss it growing while it
+        // connects; then the cursor never reaches the monitor. After Extend, the monitor joins the
+        // desktop seconds after it switches to HDMI 2, so start Deskflow once it has.
+        const j = joining;
+        joining = null;
+        if (j && Date.now() < j.until && !(await layout.joined(j.monitors, JOIN_WAIT_MS).catch(() => true))) {
+          store.log("warn", "The monitor has not joined the laptop's desktop yet; if the cursor cannot reach it, switch to Laptop mode again.");
+        }
+        await client!.start();
+      } else await client!.stop();
     },
     onHeard: () => {
       const last = store.state.peer.lastSeenAt ?? 0;

@@ -30,8 +30,13 @@ export interface MonitorControl {
 /** Laptop: its Windows display layout. */
 export interface DisplayLayout {
   get(): Promise<DisplayTopology>;
-  /** Resolves once Windows reports the new layout. */
-  set(topology: "extend" | "internal"): Promise<DisplayTopology>;
+  /** Resolves once Windows reports the new layout, with how many displays it spans. */
+  set(topology: "extend" | "internal"): Promise<{ topology: DisplayTopology; paths: number }>;
+  /**
+   * Waits until the desktop itself spans `monitors` displays, or `timeoutMs` passes; false then.
+   * A new layout is in place before its displays join the desktop (see kvm-display.rs).
+   */
+  joined(monitors: number, timeoutMs: number): Promise<boolean>;
 }
 
 type Reply = Record<string, unknown> & { ok: boolean; error?: string };
@@ -100,12 +105,17 @@ export class DisplayHelper implements MonitorControl {
     return asTopology((await this.#run(["topology", "get"], 10_000)).topology);
   }
 
-  async setLayout(topology: "extend" | "internal"): Promise<DisplayTopology> {
-    return asTopology((await this.#run(["topology", "set", topology], 15_000)).topology);
+  async setLayout(topology: "extend" | "internal"): Promise<{ topology: DisplayTopology; paths: number }> {
+    const r = await this.#run(["topology", "set", topology], 15_000);
+    return { topology: asTopology(r.topology), paths: typeof r.paths === "number" ? r.paths : 0 };
+  }
+
+  async joined(monitors: number, timeoutMs: number): Promise<boolean> {
+    return (await this.#run(["desktop", "wait", String(monitors), String(timeoutMs)], timeoutMs + 5_000)).settled === true;
   }
 }
 
 /** The laptop's layout side of the helper, under the DisplayLayout names. */
 export function displayLayout(h: DisplayHelper): DisplayLayout {
-  return { get: () => h.get(), set: (t) => h.setLayout(t) };
+  return { get: () => h.get(), set: (t) => h.setLayout(t), joined: (n, ms) => h.joined(n, ms) };
 }

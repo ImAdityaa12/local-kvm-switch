@@ -6,6 +6,8 @@
 //!   kvm-display monitor set hdmi1|hdmi2    switch input, then read it back
 //!   kvm-display topology get               this PC's display layout (extend, internal, ...)
 //!   kvm-display topology set extend|internal
+//!   kvm-display desktop get                how many displays the desktop spans now, and its bounds
+//!   kvm-display desktop wait <n> <ms>      waits up to <ms> for the desktop to span <n> displays
 //!
 //! Monitor control speaks standard DDC/CI (MCCS VCP 0x60: 0x11 HDMI 1, 0x12 HDMI 2) over one of:
 //!   usb   the monitor's own USB connection: the VIA "billboard" device (2109:8886) Gigabyte
@@ -29,6 +31,10 @@ use windows::Win32::Devices::Display::{
 use windows::Win32::Foundation::{LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetSystemMetrics, SM_CMONITORS, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+};
 use windows::core::{BOOL, PCSTR, w};
 
 const VCP_INPUT: u8 = 0x60;
@@ -391,6 +397,31 @@ fn topology_set(target: &str) -> Result<(), String> {
     }
 }
 
+// The layout above is Windows' saved configuration; a display joins the desktop itself only once
+// its link is up, which for a monitor showing another input is seconds after it switches to us.
+fn desktop_wait(monitors: &str, ms: &str) -> Result<(), String> {
+    let usage = || "desktop wait takes a display count and a time in milliseconds".to_string();
+    let want: i32 = monitors.parse().map_err(|_| usage())?;
+    let limit = Duration::from_millis(ms.parse().map_err(|_| usage())?);
+    // Bounds in real pixels, as Deskflow (DPI aware) reports them.
+    let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    let start = Instant::now();
+    loop {
+        let n = unsafe { GetSystemMetrics(SM_CMONITORS) };
+        if n >= want || start.elapsed() >= limit {
+            let [x, y, w, h] = [SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN].map(|m| unsafe { GetSystemMetrics(m) });
+            out(&[
+                ("monitors", n.to_string()),
+                ("settled", (n >= want).to_string()),
+                ("bounds", format!("[{x},{y},{w},{h}]")),
+                ("ms", start.elapsed().as_millis().to_string()),
+            ]);
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     match (args.first().map(String::as_str), args.get(1).map(String::as_str), args.get(2).map(String::as_str)) {
         (Some("monitor"), Some("probe"), None) => monitor_probe(),
@@ -398,7 +429,9 @@ fn run(args: &[String]) -> Result<(), String> {
         (Some("monitor"), Some("set"), Some(t)) => monitor_set(t),
         (Some("topology"), Some("get"), None) => topology_get(),
         (Some("topology"), Some("set"), Some(t)) => topology_set(t),
-        _ => Err("usage: kvm-display monitor probe|get|set hdmi1|hdmi2, or topology get|set extend|internal".into()),
+        (Some("desktop"), Some("get"), None) => desktop_wait("0", "0"),
+        (Some("desktop"), Some("wait"), Some(n)) => desktop_wait(n, args.get(3).map_or("", String::as_str)),
+        _ => Err("usage: kvm-display monitor probe|get|set hdmi1|hdmi2, topology get|set extend|internal, or desktop get|wait <n> <ms>".into()),
     }
 }
 
