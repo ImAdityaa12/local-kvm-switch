@@ -21,6 +21,15 @@ while the cursor is on the server.
 - Laptop mode: the gaming PC asks the laptop agent to start `deskflow-core client`, then starts
   `deskflow-core server -s <generated settings>`; both stop when Gaming PC is selected again. Moving the cursor uses a configured `switchToScreen` hotkey
   (user presses it in Phase 1; automated press is a spike).
+  Revised 2026-10-19: the agent presses the hotkey itself, once, after the client has connected
+  (`agent/src/deskflow/hotkey.ts`). Deskflow registers the hotkey with `RegisterHotKey`, which
+  Windows also fires for simulated key presses (checked against 1.27.0). If the cursor has not moved
+  3 s later (for example, while a window that runs as admin has focus, Windows drops the simulated
+  keys), the user is asked to press it. Nothing is pressed in Gaming PC mode.
+- Either machine may start the switch. The laptop asks the gaming PC over the peer link
+  (`input.take`, `input.return`); the gaming PC still runs the switch, so the rules above hold
+  whichever side asked. Both machines belong to one person, so the gaming PC does not ask for
+  approval.
 - Confirm screen changes through `enterCommand`/`exitCommand`, not log parsing.
 - ~~TLS on, fingerprint pinning on both sides.~~ Revised 2026-10-17: Deskflow listens on loopback
   with its TLS off, and the laptop reaches it only through a tunnel inside our PSK-authenticated peer

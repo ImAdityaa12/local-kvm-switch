@@ -27,6 +27,50 @@ export const MIC_TUNNEL_PORT = 24831;
 const START_TIMEOUT_MS = 8_000;
 const VB_PLAYBACK = /^CABLE Input\b/i;
 const VB_RECORDING = /^CABLE Output\b/i;
+/** The device part of the name, which stays when the endpoint itself is renamed (e.g. "Speakers (VB-Audio Virtual Cable)"). */
+const VB_DEVICE = /\(VB-Audio Virtual Cable\)\s*$/i;
+const SIXTEEN_CH = /\b16\s*Ch\b/i;
+/** Windows' AUDCLNT_E_DEVICE_IN_USE. */
+const DEVICE_IN_USE = /0x8889000A/i;
+
+/**
+ * Any input of the virtual cable: "CABLE Input", and "CABLE In 16ch" that newer
+ * VB-CABLE versions add. Only one of them can be used at a time, so sound sent
+ * to "CABLE In 16ch" also blocks the mic from opening CABLE Input.
+ */
+export function isCablePlayback(name: string): boolean {
+  return /^CABLE In(put\b|\s)/i.test(name) || (VB_DEVICE.test(name) && !VB_RECORDING.test(name));
+}
+
+/** The cable's playback side the mic is played into, and its recording side apps use, by name or else by device. */
+export function findCable<T extends { name: string }>(d: { playback: T[]; capture: T[] }): { input?: T; output?: T } {
+  const input = d.playback.find((x) => VB_PLAYBACK.test(x.name)) ?? d.playback.find((x) => VB_DEVICE.test(x.name) && !SIXTEEN_CH.test(x.name));
+  const output = d.capture.find((x) => VB_RECORDING.test(x.name)) ?? d.capture.find((x) => VB_DEVICE.test(x.name));
+  return { input, output };
+}
+
+/**
+ * A virtual output other than the mic's cable: Voicemeeter's "Voicemeeter Input"
+ * (free; the Voicemeeter app must not be running, or it plays the sound on
+ * the speakers) or VB-CABLE A+B's "CABLE-A Input". Laptop sound set to one of
+ * them reaches the IEM without the laptop's speakers playing it, and leaves
+ * the mic's cable alone.
+ */
+export function isSecondCable(name: string): boolean {
+  return /^Voicemeeter\b.*\bIn(put\b|\s)/i.test(name) || /^CABLE-[AB] In(put\b|\s)/i.test(name);
+}
+
+/** The laptop's output is the mic's cable: say what to choose instead. */
+export function cableIsDefaultError(name: string, what: string, playback: { name: string }[]): EngineError {
+  const second = playback.find((x) => isSecondCable(x.name));
+  return new EngineError({
+    code: "device-missing",
+    message: `The laptop's sound output is "${name}", the microphone's cable. ${what}`,
+    hint: second
+      ? `On the laptop: Settings → System → Sound → Output → "${second.name}". Laptop sound then goes only to your IEM.`
+      : "To hear laptop sound only in your IEM, install Voicemeeter (free, vb-audio.com/Voicemeeter) on the laptop and set Sound → Output to \"Voicemeeter Input\". Or choose your speakers or headphones.",
+  });
+}
 
 export interface AudioPeer {
   request(req: PeerRequest): Promise<void>;
@@ -47,6 +91,13 @@ function errorFrom(e: HelperEvent, what: "playback" | "microphone" = "playback")
     case "peer-unreachable":
       return { code, message: "The other machine's audio stream is not reachable" };
     default:
+      if (DEVICE_IN_USE.test(message)) {
+        return {
+          code: "device-missing",
+          message: `The ${what} device is in use by something else (Windows error 0x8889000A).`,
+          hint: "On the laptop, set Sound → Output to your speakers or headphones, not a CABLE device. Otherwise close the app holding the device, or untick \"Allow applications to take exclusive control\" in its Sound properties → Advanced.",
+        };
+      }
       return { code: "internal", message };
   }
 }
@@ -186,6 +237,9 @@ export class HelperAudio implements AudioEngine {
     try {
       await waitEvent(sender, "listening", START_TIMEOUT_MS, "microphone");
       const streaming = waitEvent(sender, "streaming", START_TIMEOUT_MS, "microphone");
+      // Awaited below. If the laptop refuses first, stopping the sender fails this
+      // one, and that must not crash the agent.
+      streaming.catch(() => {});
       await this.#peer.request({ op: "audio.start", route, volume: this.#volume[route] });
       started = await streaming;
     } catch (e) {
@@ -249,12 +303,11 @@ export class LaptopAudio {
   }
 
   /** The virtual microphone apps can record from, if VB-CABLE is installed. */
-  async endpoint(): Promise<VirtualEndpointState & { playbackId: string | null }> {
+  async endpoint(): Promise<VirtualEndpointState & { playbackId: string | null; playbackName?: string }> {
     const d = await HelperProcess.list(this.#exe);
-    const input = d.playback.find((x) => VB_PLAYBACK.test(x.name));
-    const output = d.capture.find((x) => VB_RECORDING.test(x.name));
+    const { input, output } = findCable(d);
     if (!input || !output) return { present: false, isDefault: null, playbackId: null };
-    return { present: true, name: output.name, isDefault: output.isDefault, playbackId: input.id };
+    return { present: true, name: output.name, isDefault: output.isDefault, playbackId: input.id, playbackName: input.name };
   }
 
   async announceEndpoint(): Promise<void> {
@@ -290,13 +343,7 @@ export class LaptopAudio {
     // so this would send your own voice back into your ears.
     const d = await HelperProcess.list(this.#exe);
     const def = d.playback.find((x) => x.isDefault);
-    if (def && VB_PLAYBACK.test(def.name)) {
-      throw new EngineError({
-        code: "device-missing",
-        message: "The laptop's default playback device is the virtual cable.",
-        hint: "In Windows Sound settings on the laptop, set Output back to your speakers or headphones.",
-      });
-    }
+    if (def && isCablePlayback(def.name)) throw cableIsDefaultError(def.name, "Sending it would put your own voice back into your ears.", d.playback);
     const s = HelperProcess.spawn(this.#exe, ["send", "--connect", `127.0.0.1:${AUDIO_TUNNEL_PORT}`]);
     this.#sender = s;
     const started = await waitEvent(s, "streaming", START_TIMEOUT_MS).catch(async (e) => {
@@ -304,7 +351,7 @@ export class LaptopAudio {
       throw e;
     });
     const f = started.format as AudioFormat;
-    this.#log("info", `Sending this laptop's audio at ${f.sampleRate / 1000} kHz, ${f.channels} ch, ${f.bitDepth}-bit`);
+    this.#log("info", `Sending this laptop's audio${def ? ` from ${def.name}` : ""} at ${f.sampleRate / 1000} kHz, ${f.channels} ch, ${f.bitDepth}-bit`);
     void s.exited.then(() => {
       if (this.#sender === s) {
         this.#sender = null;
@@ -319,6 +366,10 @@ export class LaptopAudio {
     if (!ep.present || !ep.playbackId) {
       throw new EngineError({ code: "endpoint-missing", message: "VB-CABLE is not installed on the laptop.", hint: "Install it, reboot, and restart the agent." });
     }
+    // Laptop sound going into the cable blocks CABLE Input and mixes into the mic.
+    const playback = (await HelperProcess.list(this.#exe)).playback;
+    const def = playback.find((x) => x.isDefault);
+    if (def && isCablePlayback(def.name)) throw cableIsDefaultError(def.name, "It blocks the microphone and would mix laptop sounds into it.", playback);
     const p = HelperProcess.spawn(this.#exe, ["play", "--connect", `127.0.0.1:${MIC_TUNNEL_PORT}`, "--device", ep.playbackId, "--volume", String(volume)]);
     this.#micPlayer = p;
     let live = false;
@@ -347,6 +398,6 @@ export class LaptopAudio {
       throw e;
     });
     live = true;
-    this.#log("info", `Playing the gaming PC microphone into CABLE Input; apps record it from ${ep.name ?? "CABLE Output"}`);
+    this.#log("info", `Playing the gaming PC microphone into ${ep.playbackName ?? "CABLE Input"}; apps record it from ${ep.name ?? "CABLE Output"}`);
   }
 }

@@ -12,6 +12,8 @@ The app should also support **two-way audio routing** so the user can keep their
 - Laptop system audio → LAN → gaming PC playback device → IEM.
 - Gaming PC microphone input (the IEM mic) → LAN → laptop microphone endpoint → apps such as Discord.
 
+One monitor (**Gigabyte G24F 2**, 1920×1080, 180 Hz) is shared as well: HDMI 1 → gaming PC, HDMI 2 → laptop, and the monitor's **USB upstream cable stays permanently on the gaming PC**. Selecting a mode also switches the monitor input (from the gaming PC, over that USB connection) and the laptop's Windows display configuration (Extend in Laptop mode, PC screen only in Gaming PC mode). See §14.
+
 The user wants one app to control these features. Avoid requiring the user to open and manually configure separate audio-routing software during normal operation. The app may use or package suitable native components, subject to licensing and installation requirements.
 
 **Working name:** LAN KVM Switcher
@@ -30,6 +32,10 @@ The user wants one app to control these features. Avoid requiring the user to op
 10. If a connection fails, stop/disable remote routing safely and provide a recovery path.
 11. Do not claim a browser-only app can take ownership of USB devices, globally capture input, or create system-wide virtual audio endpoints.
 12. Never attempt to evade or interfere with game anti-cheat software.
+13. Either machine may start a mode switch; the laptop sends its request to the gaming PC agent over the LAN.
+14. The monitor input is switched by the gaming PC agent through the monitor's USB connection (or another verified direct control path); the laptop never needs its own USB connection to the monitor.
+15. The laptop's display configuration is changed on the laptop: **Extend** in Laptop mode, **PC screen only** in Gaming PC mode. The laptop's built-in screen stays active in both.
+16. Monitor commands, their acknowledgements, and the verified monitor state are reported separately; a switch that could not be confirmed is shown as unconfirmed, never as done.
 
 ## 3. Architecture at a glance
 
@@ -42,13 +48,18 @@ The user wants one app to control these features. Avoid requiring the user to op
        +----------------------+----------------------+
        |                                             |
 Gaming PC native agent                         Laptop native agent
-- input engine integration                    - input engine integration
-- capture microphone                          - capture system audio
-- play received laptop audio                   - expose remote mic endpoint
-- manage audio routes                          - manage audio routes
-       |                                             |
-       +-------------- local LAN --------------------+
+- mode state machine (owner)                   - display topology (Extend /
+- input engine integration                       PC screen only), reports result
+- capture microphone                          - input engine integration
+- play received laptop audio                   - capture system audio
+- manage audio routes                          - expose remote mic endpoint
+- monitor input control ──USB──> G24F 2        - manage audio routes
+       |                          HDMI1 ^  ^ HDMI2   |
+       |                    (gaming PC) |  | (laptop)|
+       +-------------- local LAN (paired, encrypted peer link) ---+
 ```
+
+Monitor control is a separate component from the input path: it never installs hooks or touches keyboard/mouse input.
 
 The dashboard is the control plane, not the audio engine. Real-time input and audio work must run in native components, not in a browser tab or Next.js server route.
 
@@ -260,6 +271,13 @@ Do not present a single “Connected” label as proof that every route works.
 - Verify mute/unmute and device removal/reconnection.
 - Confirm microphone privacy permissions and driver requirements are explained.
 
+### Display (see §14 and `docs/feasibility-display-switching.md` §9)
+- The gaming PC switches the monitor to HDMI 2 while HDMI 1 is shown, and to HDMI 1 while HDMI 2 is shown.
+- Read-back of the selected input matches what the monitor shows.
+- The laptop switches between Extend and PC screen only, and its built-in screen stays active.
+- Gaming PC agent offline: the laptop reports that the monitor cannot be switched, and changes nothing.
+- A failed monitor switch never leaves the user without a usable screen.
+
 ### Security and lifecycle
 - Unpaired devices cannot control or stream to the agent.
 - No public-internet exposure or router port forwarding is required.
@@ -303,3 +321,71 @@ Desk research results; see `docs/feasibility-report.md` and `docs/adr/`. Not yet
 - Phase 1 (2026-10-17): pairing uses numeric comparison (both screens show a code; both users
   confirm) rather than typing a code, which satisfies §8's "equivalent secure flow". Deskflow runs on
   loopback and is tunnelled through the TLS-PSK peer link instead of using its own TLS.
+
+## 14. One-USB-host display switching (added 2026-10-19)
+
+### Hardware
+
+- Monitor: Gigabyte G24F 2 (1920×1080, 180 Hz). HDMI 1 → gaming PC, HDMI 2 → laptop.
+- The monitor's USB upstream cable stays on the gaming PC permanently. It is never moved between computers.
+- Both computers are on the same home LAN.
+- OSD Sidekick on the gaming PC switching the monitor to HDMI 2 shows switching over USB is possible. Its internal mechanism is not assumed to be available to this app.
+
+### Laptop mode
+
+1. The laptop (or the gaming PC itself) asks the gaming PC agent for Laptop mode over the LAN.
+2. The gaming PC agent switches the monitor to HDMI 2 through the monitor's USB connection, using a verified control mechanism.
+3. The laptop changes its Windows display configuration to **Extend these displays**.
+4. Remote keyboard/mouse control of the laptop is enabled.
+5. Laptop system audio streams to the gaming PC's playback device.
+6. The gaming PC microphone streams to the selectable laptop microphone endpoint.
+7. The dashboard reports the actual result of each step.
+
+### Gaming PC mode
+
+1. The laptop (or the gaming PC itself) asks the gaming PC agent for Gaming PC mode over the LAN.
+2. The gaming PC agent switches the monitor to HDMI 1.
+3. The laptop changes its display configuration to **PC screen only**: its built-in screen stays active, and the external monitor leaves its active configuration.
+4. Remote keyboard/mouse control stops; the gaming PC has direct local input (§2.3, §9).
+5. The audio routes stop, restoring the gaming PC's normal audio and microphone paths.
+6. The dashboard reports the actual result of each step.
+
+### Architecture requirements
+
+- A native agent on the gaming PC receives authenticated LAN commands and controls the monitor input. It must be able to switch the input while HDMI 2 is shown and the gaming PC's video is not visible.
+- Prefer supported APIs or direct monitor control (DDC/CI over the monitor's USB link or video cable) over UI automation. Brittle screen-coordinate automation is not acceptable. If no supported mechanism works, explain the alternatives and limits before choosing a fallback.
+- Display configuration changes run on the laptop, in the signed-in user's session, through the documented Windows display configuration APIs.
+- One application-level state machine coordinates display, input and audio:
+  - The gaming PC agent acknowledges monitor commands.
+  - The laptop agent reports display-mode changes.
+- Monitor control is separate from the real-time input path. In Gaming PC mode input is not intercepted, relayed, suppressed or injected.
+- The audio requirements and architecture are unchanged. Real-time audio never goes through Next.js routes.
+- LAN commands use the existing paired, encrypted peer link, with timeouts, failure reporting and a recovery path. Nothing is exposed to the public internet.
+
+### Reliability and sequencing
+
+- Laptop mode: request HDMI 2 from the gaming PC agent and confirm the switch where possible, then activate the laptop's extended display and enable laptop input and audio routing.
+  - The feasibility report proposes switching the laptop to Extend *before* requesting HDMI 2: in PC screen only the laptop sends no HDMI signal. **This order is pending approval.**
+- Gaming PC mode: request HDMI 1 and change the laptop to PC screen only, ordered so that a failure never leaves the user without an accessible screen.
+- No indefinite retries and no repeated toggling.
+- If the gaming PC agent is offline, report that the monitor cannot be switched remotely; never claim the switch succeeded.
+- If display reconfiguration fails, keep the laptop's built-in display usable and show a clear recovery path.
+- Commands and acknowledgements are distinct from verified physical monitor state. Show clearly when an input change could not be independently confirmed.
+
+### Status
+
+Feasibility only: `docs/feasibility-display-switching.md`. No implementation until that report is approved.
+
+## 15. Feasibility updates (2026-10-19, display switching)
+
+Read-only hardware probes on the laptop, plus desk research; details and sources in `docs/feasibility-display-switching.md`.
+
+- The G24F 2 answers DDC/CI over HDMI (MStar scaler, MCCS 2.2).
+  - Its capability string lists only VCP `10 12 87 E0`.
+  - Input source **VCP 0x60 is readable anyway** and reads 0x12 (MCCS HDMI 2) while the laptop is shown.
+- The monitor's USB control device is a **VIA billboard `2109:8886`**, driven through OSD Sidekick's libusb-win32 driver.
+  - **Standard DDC/CI works over that USB link**: brightness and input read back the same values as over HDMI.
+  - Writes (switching) are **not tested yet**.
+- OSD Sidekick has no documented command interface, and its hotkeys include no input switch. It is not used as a control path; only its USB driver is.
+- Laptop topology: `SetDisplayConfig` with `SDC_TOPOLOGY_EXTEND` / `SDC_TOPOLOGY_INTERNAL` (documented; needs the user's desktop session). `DisplaySwitch.exe` arguments are undocumented and are not used.
+- During the probes the monitor's USB cable was found on the **laptop**, with OSD Sidekick installed there. The production setup puts it on the gaming PC (to be confirmed).

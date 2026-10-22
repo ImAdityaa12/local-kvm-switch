@@ -8,6 +8,8 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cableIsDefaultError, findCable, HelperAudio, isCablePlayback, isSecondCable } from "../src/audio/engine.ts";
+import { EngineError } from "../src/engines.ts";
 import { HelperProcess, helperPath } from "../src/audio/helper.ts";
 
 const exe = helperPath(fileURLToPath(new URL("../..", import.meta.url)));
@@ -169,4 +171,61 @@ test("player gives up when no sender appears", { skip }, async () => {
   const err = await waitFor(play, "error", 15_000);
   assert.equal(err.code, "peer-unreachable");
   await play.exited;
+});
+
+test("every input of the virtual cable counts as the cable, nothing else does", () => {
+  assert.equal(isCablePlayback("CABLE Input (VB-Audio Virtual Cable)"), true);
+  assert.equal(isCablePlayback("CABLE In 16ch (VB-Audio Virtual Cable)"), true);
+  assert.equal(isCablePlayback("CABLE Output (VB-Audio Virtual Cable)"), false);
+  assert.equal(isCablePlayback("Speakers (Realtek(R) Audio)"), false);
+});
+
+test("the mic route fails cleanly when the laptop refuses it", { skip }, async () => {
+  const devices = await HelperProcess.list(exe);
+  const mic = devices.capture[0];
+  if (!mic) return;
+  const refused = new EngineError({ code: "device-missing", message: "refused by the laptop" });
+  const audio = new HelperAudio(exe, { request: async (req) => { if (req.op === "audio.start") throw refused; } });
+  audio.setEndpoint({ present: true, isDefault: false });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (e: unknown) => unhandled.push(e);
+  process.on("unhandledRejection", onUnhandled);
+  await assert.rejects(audio.start("micToLaptop", mic.id), /refused by the laptop/);
+  await new Promise((r) => setTimeout(r, 500));
+  process.off("unhandledRejection", onUnhandled);
+  assert.deepEqual(unhandled, []);
+});
+
+test("a second virtual output (Voicemeeter, VB-CABLE A+B) is a fine laptop output, and the error points to it", () => {
+  assert.equal(isSecondCable("Voicemeeter Input (VB-Audio Voicemeeter VAIO)"), true);
+  assert.equal(isSecondCable("Voicemeeter AUX Input (VB-Audio Voicemeeter AUX VAIO)"), true);
+  assert.equal(isSecondCable("Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)"), false);
+  assert.equal(isCablePlayback("Voicemeeter Input (VB-Audio Voicemeeter VAIO)"), false);
+  const withVm = cableIsDefaultError("CABLE In 16ch (VB-Audio Virtual Cable)", "", [{ name: "Voicemeeter Input (VB-Audio Voicemeeter VAIO)" }]);
+  assert.match(withVm.detail.hint ?? "", /"Voicemeeter Input \(VB-Audio Voicemeeter VAIO\)"/);
+  assert.equal(isSecondCable("CABLE-A Input (VB-Audio Cable A)"), true);
+  assert.equal(isSecondCable("CABLE-B In 16ch (VB-Audio Cable B)"), true);
+  assert.equal(isCablePlayback("CABLE-A Input (VB-Audio Cable A)"), false);
+  assert.equal(isSecondCable("CABLE Input (VB-Audio Virtual Cable)"), false);
+  const withA = cableIsDefaultError("CABLE In 16ch (VB-Audio Virtual Cable)", "", [{ name: "CABLE-A Input (VB-Audio Cable A)" }]);
+  assert.match(withA.detail.hint ?? "", /"CABLE-A Input \(VB-Audio Cable A\)"/);
+  const without = cableIsDefaultError("CABLE In 16ch (VB-Audio Virtual Cable)", "", [{ name: "Speakers (Realtek(R) Audio)" }]);
+  assert.match(without.detail.hint ?? "", /install Voicemeeter/);
+});
+
+test("the mic's cable is found even after its endpoint was renamed", () => {
+  const renamed = {
+    playback: [
+      { id: "16", name: "CABLE In 16 Ch (VB-Audio Virtual Cable)" },
+      { id: "in", name: "Speakers (VB-Audio Virtual Cable)" },
+      { id: "vm", name: "Voicemeeter Input (VB-Audio Voicemeeter VAIO)" },
+    ],
+    capture: [{ id: "out", name: "CABLE Output (VB-Audio Virtual Cable)" }],
+  };
+  const { input, output } = findCable(renamed);
+  assert.equal(input?.id, "in");
+  assert.equal(output?.id, "out");
+  assert.equal(isCablePlayback("Speakers (VB-Audio Virtual Cable)"), true);
+  assert.equal(isCablePlayback("CABLE In 16 Ch (VB-Audio Virtual Cable)"), true);
+  assert.equal(isSecondCable("Voicemeeter In 1 (VB-Audio Voicemeeter VAIO)"), true);
 });

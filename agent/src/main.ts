@@ -16,11 +16,15 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION, isLanAddress, type AgentError, type Machine } from "../../lib/protocol/index.ts";
-import { Controller, type Pairing } from "./controller.ts";
-import { EngineError, type AudioEngine, type InputEngine, type InputReport } from "./engines.ts";
+import { Controller, type ModeControl, type Pairing } from "./controller.ts";
+import { EngineError, type AudioEngine, type InputEngine } from "./engines.ts";
 import { DESKFLOW_SERVER_PORT, DESKFLOW_TUNNEL_PORT } from "./deskflow/config.ts";
-import { DeskflowClient, DeskflowServerInput, type CursorEvent, type DeskflowPaths } from "./deskflow/engines.ts";
+import { DeskflowClient, DeskflowServerInput, LaptopInput, type CursorEvent, type DeskflowPaths } from "./deskflow/engines.ts";
+import { pressHotkey } from "./deskflow/hotkey.ts";
+import { DisplayHelper, displayHelperPath, displayLayout } from "./display/helper.ts";
+import { ModeRunner, idleMode } from "./mode.ts";
 import { preflight } from "./deskflow/preflight.ts";
+import { DAEMON_PIPE, daemonRequest, daemonRunning } from "./deskflow/daemon.ts";
 import { NullAudio } from "./null-audio.ts";
 import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudio, MIC_SEND_PORT, MIC_TUNNEL_PORT } from "./audio/engine.ts";
 import { helperPath } from "./audio/helper.ts";
@@ -29,12 +33,17 @@ import { PairingManager } from "./peer/manager.ts";
 import { TrustStore } from "./peer/trust.ts";
 import { CONTROL_PATH, startControlServer } from "./server.ts";
 import { Store } from "./store.ts";
+import { Tray, openDashboard, trayPath, trayView } from "./tray.ts";
 import { logDatabaseUrl, remoteLog, saveLogDatabaseUrl } from "./remote-log.ts";
 import { dataDir, loadOrCreateToken } from "./token.ts";
 import { SimAudio, SimInput, SimPairing, SimWorld } from "./sim/world.ts";
 
 const VERSION = "0.2.0";
 const DEFAULT_DESKFLOW = "C:\\Program Files\\Deskflow\\deskflow-core.exe";
+/** Laptop: how long after Extend a keyboard-and-mouse switch waits for the monitor to join the desktop. */
+const JOIN_WINDOW_MS = 30_000;
+/** At most this long, so input.prepare still answers inside the gaming PC's 10 s. Seen joining in 3–5 s. */
+const JOIN_WAIT_MS = 6_000;
 
 const { values } = parseArgs({
   options: {
@@ -44,10 +53,12 @@ const { values } = parseArgs({
     deskflow: { type: "string", default: DEFAULT_DESKFLOW },
     "audio-helper": { type: "string" },
     port: { type: "string", default: "47820" },
-    dashboard: { type: "string", default: "http://localhost:3000" },
+    // Default: the built dashboard the agent serves itself (npm run build). Pass http://localhost:7999 for next dev.
+    dashboard: { type: "string" },
     origin: { type: "string", multiple: true, default: [] },
     unpaired: { type: "boolean", default: false },
     "no-endpoint": { type: "boolean", default: false },
+    "no-tray": { type: "boolean", default: false },
     "log-db": { type: "string" },
   },
 });
@@ -136,7 +147,15 @@ async function buildSimulated(): Promise<Built> {
     });
     store.log("info", "Paired with Laptop (simulated)");
   });
-  const controller = new Controller({ store, input, audio, peer: world.peer, pairing, sim: world });
+  let mode: ModeRunner | null = null;
+  const controller = new Controller({ store, input, audio, peer: world.peer, pairing, sim: world, mode: () => mode });
+  // No monitor to switch, and the simulated laptop's display layout always "succeeds".
+  mode = new ModeRunner({
+    store,
+    run: (c) => controller.handle(c),
+    monitor: null,
+    laptop: { online: () => store.state.peer.link === "online" && world.peerReachable, setLayout: async () => {} },
+  });
   // Stands in for the peer heartbeat a real laptop agent sends.
   const beat = setInterval(() => {
     if (store.state.peer.link === "online" && world.peerReachable) {
@@ -167,6 +186,8 @@ function deskflowPaths(): DeskflowPaths {
     exe: values.deskflow!,
     dir: join(dir, "deskflow"),
     notifyCommand: (event) => [process.execPath.replace(/\\/g, "/"), notifyScript, String(port), event, tokenFile.replace(/\\/g, "/")],
+    // The laptop's client runs through the Deskflow service when it is on, so admin windows take input.
+    servicePipe: machine === "laptop" && process.platform === "win32" ? DAEMON_PIPE : undefined,
   };
 }
 
@@ -204,28 +225,33 @@ async function buildReal(): Promise<Built> {
   if (!haveHelper) store.log("warn", "The audio helper is not built, so audio routing is unavailable. Run npm run build:audio.");
 
   const paths = deskflowPaths();
+  // Monitor input (gaming PC) and display layout (laptop): native/kvm-audio/src/bin/kvm-display.rs.
+  const display = new DisplayHelper(displayHelperPath(repoRoot));
+  if (!display.built) store.log("warn", "The display helper is not built, so the monitor and display layout cannot be switched. Run npm run build:audio.");
+  const layout = displayLayout(display);
+  // Laptop: after Extend, the displays the desktop should span and until when to wait for them (see input.prepare).
+  let joining: { monitors: number; until: number } | null = null;
+  store.update((s) => {
+    s.mode = idleMode();
+  });
   let input: InputEngine;
   let client: DeskflowClient | null = null;
 
   if (machine === "gaming-pc") {
-    const server = new DeskflowServerInput(paths, { request: (r) => link.request(r) });
+    // A click presses the switch hotkey for the user (hotkey.ts); not in tests or off Windows.
+    const server = new DeskflowServerInput(paths, { request: (r) => link.request(r) }, process.platform === "win32" ? { pressHotkey } : {});
     cursorHandler = (e) => server.cursor(e);
     input = server;
   } else {
-    // The laptop does not choose the target; it runs the client when asked and can give input back.
-    let report: (r: InputReport, e?: AgentError) => void = () => {};
+    // The laptop runs the client when the gaming PC asks for it, and can itself ask the gaming PC to switch or return.
+    let laptopInput: LaptopInput | null = null;
     client = new DeskflowClient(paths, (st, error) => {
-      report({ target: st.entered ? "laptop" : "gaming-pc", engine: st.engine, hooksActive: st.engine === "running", clientConnected: st.connected }, error);
+      laptopInput?.clientStatus(st, error);
       link.emit({ op: "input.status", ...st });
-    });
+    }, (m) => store.log("warn", m));
     const c = client;
     cursorHandler = (e) => c.cursor(e);
-    input = {
-      kind: "deskflow",
-      onReport: (cb) => (report = cb),
-      activateRemote: () => Promise.reject(new EngineError({ code: "not-supported", message: "Switch to the laptop from the gaming PC." })),
-      deactivate: () => c.stop(),
-    };
+    input = laptopInput = new LaptopInput(c, { request: (r, timeoutMs) => link.request(r, timeoutMs) });
   }
   store.update((s) => {
     s.input.hotkeys = input.hotkeys;
@@ -256,16 +282,50 @@ async function buildReal(): Promise<Built> {
       }
       events.fire(online, info.error);
       if (online) void laptopAudio?.announceEndpoint();
+      // Each side tells the other what it knows: the laptop its display layout, the gaming PC the mode.
+      if (online && machine === "laptop") void layout.get().then((topology) => link.emit({ op: "display.status", topology }), () => {});
+      if (online && machine === "gaming-pc" && store.state.mode) link.emit({ op: "mode.status", mode: store.state.mode });
     },
     onRequest: async (req) => {
+      if (req.op === "mode.set") {
+        if (!modeRunner) throw new EngineError({ code: "not-supported", message: "Only the gaming PC switches modes." });
+        store.log("info", `${store.state.peer.name ?? "The laptop"} asked for ${req.mode === "laptop" ? "Laptop" : "Gaming PC"} mode`);
+        return modeRunner.set(req.mode);
+      }
+      if (req.op === "display.setTopology") {
+        if (machine !== "laptop") throw new EngineError({ code: "not-supported", message: "Only the laptop changes its display layout." });
+        const { topology, paths } = await layout.set(req.topology);
+        joining = topology === "extend" ? { monitors: paths, until: Date.now() + JOIN_WINDOW_MS } : null;
+        store.update((s) => {
+          if (s.mode) s.mode.laptopDisplay = topology;
+        });
+        link.emit({ op: "display.status", topology });
+        return;
+      }
+      if (req.op === "input.take" || req.op === "input.return") {
+        // Both machines belong to the same person, so the laptop may switch on its own.
+        if (machine !== "gaming-pc") throw new EngineError({ code: "not-supported", message: "Only the gaming PC takes these requests." });
+        const who = store.state.peer.name ?? "The laptop";
+        store.log("info", req.op === "input.take" ? `${who} asked for the keyboard and mouse` : `${who} gave the keyboard and mouse back`);
+        return controller.handle(req.op === "input.take" ? { type: "input.setTarget", target: "laptop" } : { type: "input.returnLocal" });
+      }
       if (machine !== "laptop") throw new EngineError({ code: "not-supported", message: "Only the laptop takes these requests." });
       if (req.op === "audio.start" || req.op === "audio.stop" || req.op === "audio.volume") {
         if (!laptopAudio) throw new EngineError({ code: "engine-missing", message: "The audio helper is not built on the laptop.", hint: "Run npm run build:audio on the laptop." });
         if (req.op === "audio.volume") return laptopAudio.setMicVolume(req.volume);
         return req.op === "audio.start" ? laptopAudio.start(req.route, req.volume) : laptopAudio.stop(req.route);
       }
-      if (req.op === "input.prepare") await client!.start();
-      else await client!.stop();
+      if (req.op === "input.prepare") {
+        // Deskflow reads the desktop's size once, as it starts, and can miss it growing while it
+        // connects; then the cursor never reaches the monitor. After Extend, the monitor joins the
+        // desktop seconds after it switches to HDMI 2, so start Deskflow once it has.
+        const j = joining;
+        joining = null;
+        if (j && Date.now() < j.until && !(await layout.joined(j.monitors, JOIN_WAIT_MS).catch(() => true))) {
+          store.log("warn", "The monitor has not joined the laptop's desktop yet; if the cursor cannot reach it, switch to Laptop mode again.");
+        }
+        await client!.start();
+      } else await client!.stop();
     },
     onHeard: () => {
       const last = store.state.peer.lastSeenAt ?? 0;
@@ -276,6 +336,19 @@ async function buildReal(): Promise<Built> {
       }
     },
     onEvent: (evt) => {
+      if (evt.op === "mode.status") {
+        // The laptop shows the gaming PC's switch as it happens.
+        if (machine === "laptop") {
+          store.update((s) => {
+            s.mode = evt.mode;
+          });
+        }
+        return;
+      }
+      if (evt.op === "display.status") {
+        modeRunner?.laptopDisplay(evt.topology);
+        return;
+      }
       if (evt.op === "input.status") {
         if (evt.engine === "error") store.log("error", "Deskflow could not start on the laptop");
         return;
@@ -316,7 +389,40 @@ async function buildReal(): Promise<Built> {
 
   requestPeer = (r) => link.request(r);
 
-  const controller = new Controller({ store, input, audio, peer: events, pairing });
+  // The gaming PC runs mode switches; the laptop asks it to.
+  const modeRunner =
+    machine === "gaming-pc"
+      ? new ModeRunner({
+          store,
+          run: (c) => controller.handle(c),
+          monitor: display.built ? display : null,
+          laptop: { online: () => link.online, setLayout: (topology) => link.request({ op: "display.setTopology", topology }, 20_000) },
+        })
+      : null;
+  const modeControl: ModeControl = modeRunner ?? {
+    set: (mode) => {
+      if (!link.online) {
+        return Promise.reject(
+          new EngineError({ code: "peer-unreachable", message: "The gaming PC is not reachable, so the monitor cannot be switched remotely.", hint: "Check that the gaming PC agent is running and on the same network." }),
+        );
+      }
+      // The gaming PC may wait up to a minute for the hotkey, plus the monitor and audio steps.
+      return link.request({ op: "mode.set", mode }, 150_000);
+    },
+  };
+  const controller = new Controller({ store, input, audio, peer: events, pairing, mode: () => modeControl });
+  if (modeRunner) {
+    // The laptop's dashboard shows the gaming PC's mode switch as it happens.
+    let sent = "";
+    store.subscribe((s) => {
+      const now = JSON.stringify(s.mode);
+      if (now !== sent && link.online && s.mode) {
+        sent = now;
+        link.emit({ op: "mode.status", mode: s.mode });
+      }
+    });
+    await modeRunner.refreshMonitor();
+  }
   try {
     await link.start();
   } catch (e) {
@@ -328,6 +434,8 @@ async function buildReal(): Promise<Built> {
   const refresh = setInterval(async () => {
     // The laptop re-reports its virtual microphone (VB-CABLE can be installed or removed).
     if (machine === "laptop") return void (link.online && laptopAudio?.announceEndpoint());
+    // The monitor's input can also change from its own buttons.
+    void modeRunner?.refreshMonitor().catch(() => {});
     if (!haveHelper) return;
     const next = await audio.listDevices().catch(() => null);
     if (next && JSON.stringify(next) !== JSON.stringify(store.state.devices)) {
@@ -338,8 +446,11 @@ async function buildReal(): Promise<Built> {
   }, 15_000);
 
   store.log("info", `Agent started as the ${machine === "gaming-pc" ? "gaming PC" : "laptop"}.`);
+  // A Deskflow the service still runs from before (an earlier agent, or the Deskflow app's settings) is ended.
+  const viaService = paths.servicePipe !== undefined && (await daemonRunning(paths.servicePipe));
+  if (viaService) await daemonRequest(paths.servicePipe!, ["stop"]).catch(() => {});
   // Say early what would make switching fail later.
-  await preflight(paths.exe).catch((e) => {
+  await preflight(paths.exe, [], (m) => store.log("info", m), viaService).catch((e) => {
     if (e instanceof EngineError) store.log("warn", `${e.detail.message} ${e.detail.hint ?? ""}`.trim());
   });
   return {
@@ -358,8 +469,11 @@ const built = values.simulate ? await buildSimulated() : await buildReal();
 const { store, controller } = built;
 
 const token = loadOrCreateToken();
-const dashboard = new URL(values.dashboard!).origin;
-const allowedOrigins = [...new Set([dashboard, dashboard.replace("localhost", "127.0.0.1"), ...values.origin!])];
+const builtDashboard = fileURLToPath(new URL("../../out", import.meta.url));
+const haveBuild = existsSync(join(builtDashboard, "index.html"));
+const ownOrigin = `http://127.0.0.1:${port}`;
+const dashboard = new URL(values.dashboard ?? (haveBuild ? ownOrigin : "http://localhost:7999")).origin;
+const allowedOrigins = [...new Set([ownOrigin, `http://localhost:${port}`, dashboard, dashboard.replace("localhost", "127.0.0.1"), ...values.origin!])];
 
 try {
   await startControlServer({
@@ -367,6 +481,7 @@ try {
     port,
     token,
     allowedOrigins,
+    staticDir: haveBuild ? builtDashboard : undefined,
     store,
     controller,
     notify: { token: notifyToken, onEvent: (e) => cursorHandler(e) },
@@ -409,6 +524,27 @@ function echoEvents(events: typeof store.state.events): void {
 echoEvents(store.state.events);
 store.subscribe((s) => echoEvents(s.events));
 
+// The notification-area icon: shows who has the keyboard and mouse, and switches from its menu.
+const tray = values["no-tray"]
+  ? null
+  : Tray.start(
+      trayPath(fileURLToPath(new URL("../..", import.meta.url))),
+      (action) => {
+        if (action === "dashboard") {
+          if (!openDashboard(link.toString())) store.log("warn", `No Chrome or Edge found. Open ${link.origin} with the link the agent printed.`);
+          return;
+        }
+        // A whole mode switch: monitor, laptop display, input and audio. Failures show in the
+        // dashboard's steps and the icon.
+        controller.handle({ type: "mode.set", mode: action === "switch" ? "laptop" : "gaming-pc" }).catch(() => {});
+      },
+      (message) => store.log("warn", message),
+    );
+if (tray) {
+  tray.show(trayView(store.state));
+  store.subscribe((s) => tray.show(trayView(s)));
+}
+
 let stopping = false;
 async function shutdown() {
   if (stopping) return;
@@ -416,6 +552,7 @@ async function shutdown() {
   console.log("Stopping: returning input to this PC and releasing resources…");
   await controller.shutdown().catch(() => {});
   await built.dispose().catch(() => {});
+  tray?.stop();
   await remoteLog.stop();
   process.exit(0);
 }

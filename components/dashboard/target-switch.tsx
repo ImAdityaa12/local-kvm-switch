@@ -2,26 +2,29 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import type { AgentState, Command, Hotkeys, Machine, SwitchStep } from "@/lib/protocol";
+import type { AgentState, Command, Hotkeys, Machine, ModeStepId, SwitchStep } from "@/lib/protocol";
 import { ENGINE_TEXT } from "./format";
 import { ErrorNote, Fact, Status } from "./bits";
+import { DisplayFacts, ModeSteps } from "./mode-steps";
 
 type Send = (c: Command) => Promise<unknown>;
 
 /**
  * The two positions of a hardware KVM selector. A half lights up only when the
- * input engine has confirmed it, never when it is merely requested.
+ * input engine has confirmed it, never when it is merely requested. Choosing one
+ * switches the whole mode: monitor input, laptop display, input and audio.
  */
 export function TargetSwitch({ state, send }: { state: AgentState; send: Send }) {
-  const { input, peer } = state;
+  const { input, peer, mode } = state;
   const [asked, setAsked] = useState<Machine | null>(null);
-  const pendingTarget = input.pending?.target ?? asked;
+  const pendingTarget = mode?.pending?.target ?? input.pending?.target ?? asked;
   const laptopReady = peer.link === "online";
 
   const choose = async (target: Machine) => {
     setAsked(target);
     try {
-      await send({ type: "input.setTarget", target });
+      // Agents older than mode switching only switch the input.
+      await send(mode ? { type: "mode.set", mode: target } : { type: "input.setTarget", target });
     } finally {
       setAsked(null);
     }
@@ -41,24 +44,24 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
           name="Laptop"
           line={
             laptopReady
-              ? `Keyboard and mouse control ${laptopName} over the network.`
+              ? `Monitor on HDMI 2, keyboard and mouse control ${laptopName}, audio both ways.`
               : peer.link === "unpaired"
                 ? "Pair a laptop below before switching."
                 : `${laptopName} is unreachable right now.`
           }
           active={input.target === "laptop"}
           pending={pendingTarget === "laptop" && input.target !== "laptop"}
-          pendingText={stepText(input.pending?.step, input.hotkeys)}
+          pendingText={stepText(input.pending?.step, input.hotkeys, mode?.steps.find((s) => s.status === "running")?.id)}
           disabled={pendingTarget !== null || (!laptopReady && input.target !== "laptop")}
           onChoose={choose}
         />
         <Half
           machine="gaming-pc"
           name="Gaming PC"
-          line="Local input. Nothing is intercepted or forwarded."
+          line="Monitor on HDMI 1, local input. Nothing is intercepted or forwarded."
           active={input.target === "gaming-pc"}
           pending={pendingTarget === "gaming-pc" && input.target !== "gaming-pc"}
-          pendingText={stepText(input.pending?.step, input.hotkeys)}
+          pendingText={stepText(input.pending?.step, input.hotkeys, mode?.steps.find((s) => s.status === "running")?.id)}
           disabled={pendingTarget !== null}
           onChoose={choose}
         />
@@ -69,13 +72,17 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
           <p className="text-2xl font-semibold tracking-[-0.02em]">
             Press <kbd>{input.hotkeys.toLaptop}</kbd> to move to the laptop
           </p>
-          <p className="max-w-[48ch] text-ink-2">Deskflow is running and the laptop is connected. Moving the cursor takes its hotkey; a click here cannot do it yet.</p>
+          <p className="max-w-[48ch] text-ink-2">
+            Deskflow is running and the laptop is connected, but pressing the hotkey for you did not move the cursor (Windows blocks this while a window that runs as admin has focus). Press it on this keyboard.
+          </p>
         </div>
       ) : null}
 
-      {input.error ? <ErrorNote error={input.error} className="mt-2" /> : null}
+      {mode ? <ModeSteps mode={mode} /> : null}
+      {input.error && !mode?.error ? <ErrorNote error={input.error} className="mt-2" /> : null}
 
       <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-5 bg-surface-1 px-5 py-5 sm:px-6 lg:grid-cols-4">
+        {mode ? <DisplayFacts mode={mode} /> : null}
         <Fact term="Input engine">
           <Status tone={input.engine === "running" ? "live" : input.engine === "error" ? "danger" : input.engine === "stopped" ? "idle" : "warn"} busy={input.engine === "starting" || input.engine === "stopping"}>
             {ENGINE_TEXT[input.engine]}
@@ -109,13 +116,23 @@ export function TargetSwitch({ state, send }: { state: AgentState; send: Send })
 const STEP_TEXT: Record<SwitchStep, string> = {
   "waiting-for-laptop": "Asking the laptop to get ready",
   "starting-engine": "Starting Deskflow",
+  "moving-cursor": "Moving the cursor to the laptop",
   "press-hotkey": "Waiting for the hotkey",
   "stopping-engine": "Stopping Deskflow",
 };
 
-function stepText(step: SwitchStep | undefined, hotkeys: Hotkeys | undefined): string {
+const MODE_STEP_TEXT: Record<ModeStepId, string> = {
+  "laptop-display": "Setting the laptop's display",
+  monitor: "Switching the monitor",
+  input: "Switching the keyboard and mouse",
+  "laptop-audio": "Starting laptop audio",
+  microphone: "Starting the microphone",
+};
+
+function stepText(step: SwitchStep | undefined, hotkeys: Hotkeys | undefined, modeStep?: ModeStepId): string {
   if (step === "press-hotkey" && hotkeys) return `Press ${hotkeys.toLaptop}`;
-  return step ? STEP_TEXT[step] : "Switching, waiting for the engine to confirm";
+  if (step) return STEP_TEXT[step];
+  return modeStep ? MODE_STEP_TEXT[modeStep] : "Switching, waiting for the engine to confirm";
 }
 
 function Half({

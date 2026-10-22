@@ -8,6 +8,7 @@ import { AudioSection } from "./audio-route";
 import { Activity, PeerPanel } from "./peer-panel";
 import { ErrorNote, Fact, Status } from "./bits";
 import { ENGINE_TEXT } from "./format";
+import { DisplayFacts, ModeSteps } from "./mode-steps";
 
 function useNow(intervalMs = 1000) {
   const [now, setNow] = useState(0);
@@ -40,7 +41,8 @@ export function Dashboard() {
 }
 
 function TopBar({ status, state, send }: { status: ConnectionStatus; state: AgentState | null; send: (c: Command) => Promise<unknown> }) {
-  const remote = state && (state.input.target === "laptop" || state.input.hooksActive || state.input.pending?.target === "laptop");
+  const remote =
+    state && (state.input.target === "laptop" || state.input.hooksActive || state.input.pending?.target === "laptop" || state.mode?.pending?.target === "laptop" || state.mode?.current === "laptop");
   const onLaptop = state?.agent.machine === "laptop";
   return (
     <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-5">
@@ -60,14 +62,15 @@ function TopBar({ status, state, send }: { status: ConnectionStatus; state: Agen
         {state ? (
           <button
             type="button"
-            onClick={() => send({ type: "input.returnLocal" })}
+            // Gaming PC mode brings the monitor and audio home too; older agents only return the input.
+            onClick={() => send(state.mode ? { type: "mode.set", mode: "gaming-pc" } : { type: "input.returnLocal" })}
             className={
               remote
                 ? "press h-11 bg-danger px-5 font-semibold text-ground hover:opacity-90"
                 : "press h-11 bg-surface-1 px-5 font-medium hover:bg-surface-2"
             }
           >
-            {onLaptop ? "Give input back to Gaming PC" : "Return to Gaming PC"}
+            {state.mode ? "Gaming PC mode" : onLaptop ? "Give input back to Gaming PC" : "Return to Gaming PC"}
           </button>
         ) : null}
       </div>
@@ -101,7 +104,7 @@ function Connected({
         </div>
       ) : null}
 
-      {state.agent.machine === "laptop" ? <LaptopInput state={state} /> : <TargetSwitch state={state} send={send} />}
+      {state.agent.machine === "laptop" ? <LaptopInput state={state} send={send} /> : <TargetSwitch state={state} send={send} />}
       {state.agent.machine === "laptop" ? <LaptopAudio /> : state.agent.engines.audio === "none" ? <AudioLater /> : <AudioSection state={state} send={send} now={now} />}
 
       <div className="mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
@@ -119,25 +122,60 @@ function Connected({
   );
 }
 
-/** On the laptop the target is chosen on the gaming PC; this shows what the laptop sees. */
-function LaptopInput({ state }: { state: AgentState }) {
+/** On the laptop: what the laptop sees, and taking the keyboard and mouse from here (the gaming PC runs the switch). */
+function LaptopInput({ state, send }: { state: AgentState; send: (c: Command) => Promise<unknown> }) {
   const { input, peer } = state;
   const here = input.target === "laptop";
+  const [asked, setAsked] = useState(false);
+  const taking = asked || input.pending?.target === "laptop" || state.mode?.pending?.target === "laptop";
+  const pcName = peer.name ?? "the gaming PC";
+  const take = async () => {
+    setAsked(true);
+    try {
+      await send(state.mode ? { type: "mode.set", mode: "laptop" } : { type: "input.setTarget", target: "laptop" });
+    } finally {
+      setAsked(false);
+    }
+  };
   return (
     <section aria-labelledby="laptop-heading" className="rise" style={{ "--i": 1 } as React.CSSProperties}>
-      <div className={here ? "bg-live p-6 text-live-ink sm:p-10" : "bg-surface-1 p-6 sm:p-10"}>
+      <div className={here ? "bg-live p-6 text-live-ink sm:p-10" : taking ? "bg-live-soft p-6 sm:p-10" : "bg-surface-1 p-6 sm:p-10"}>
         <h1 id="laptop-heading" className="text-target leading-[0.92] font-semibold tracking-[-0.045em]">
-          {here ? "This laptop has the keyboard" : "Gaming PC has the keyboard"}
+          {here ? "This laptop has the keyboard" : taking ? "Taking the keyboard" : "Gaming PC has the keyboard"}
         </h1>
         <p className={here ? "mt-5 max-w-[52ch] text-lg opacity-90" : "mt-5 max-w-[52ch] text-lg text-ink-2"}>
           {here
-            ? `Input from ${peer.name ?? "the gaming PC"} is controlling this laptop.`
-            : "Switch to the laptop from the gaming PC's dashboard."}
-          {input.hotkeys ? ` ${input.hotkeys.toGamingPc} sends it back.` : ""}
+            ? `Input from ${pcName} is controlling this laptop.`
+            : taking
+              ? input.pending?.step === "moving-cursor"
+                ? `Connected. Moving the cursor here; if it has not arrived in a few seconds, press ${input.hotkeys?.toLaptop ?? "the hotkey"} on ${pcName}'s keyboard.`
+                : `Asking ${pcName} to switch to this laptop.`
+              : `Laptop mode switches the monitor to this laptop, sets Extend, and moves the keyboard, mouse and audio here.`}
+          {here && input.hotkeys ? ` ${input.hotkeys.toGamingPc} sends it back.` : ""}
         </p>
+        {!here ? (
+          <button
+            type="button"
+            onClick={take}
+            disabled={taking || peer.link !== "online"}
+            className="press mt-8 h-12 bg-live px-6 text-lg font-semibold text-live-ink hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {taking ? (
+              <Status tone="idle" busy className="[&>span:first-child]:bg-current">
+                Switching
+              </Status>
+            ) : peer.link === "online" ? (
+              "Switch to Laptop mode"
+            ) : (
+              `${pcName} is unreachable`
+            )}
+          </button>
+        ) : null}
       </div>
-      {input.error ? <ErrorNote error={input.error} className="mt-2" /> : null}
+      {state.mode ? <ModeSteps mode={state.mode} /> : null}
+      {input.error && !state.mode?.error ? <ErrorNote error={input.error} className="mt-2" /> : null}
       <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-5 bg-surface-1 px-5 py-5 sm:px-6 lg:grid-cols-3">
+        {state.mode ? <DisplayFacts mode={state.mode} /> : null}
         <Fact term="Deskflow client">
           <Status tone={input.engine === "running" ? "live" : input.engine === "error" ? "danger" : "idle"}>{ENGINE_TEXT[input.engine]}</Status>
         </Fact>
@@ -232,7 +270,7 @@ function NotConnected({ status }: { status: ConnectionStatus }) {
           <code>npm run agent:sim</code>
         </pre>
         <p className="mt-6">
-          The agent prints a link like <span className="font-medium">localhost:3000/#agent=…&amp;token=…</span>. The token stays in this browser tab; it is never sent to a web server.
+          The agent prints a link like <span className="font-medium">localhost:7999/#agent=…&amp;token=…</span>. The token stays in this browser tab; it is never sent to a web server.
         </p>
       </section>
     </main>

@@ -6,3 +6,17 @@ edition = "2024"
 [dependencies]
 serde_json = "1"
 wasapi = "0.26.0"
+
+# The tray icon (src/bin/kvm-tray.rs) and display control (src/bin/kvm-display.rs).
+# Same windows crate version wasapi already pulls in.
+[dependencies.windows]
+version = "0.62.2"
+features = [
+  "Win32_Devices_Display",
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+]

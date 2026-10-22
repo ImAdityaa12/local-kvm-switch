@@ -40,12 +40,20 @@ export interface SettingsInput {
   layoutFile?: string;
   enterCommand: string;
   exitCommand: string;
+  /**
+   * Started by the Deskflow service instead of the agent (see daemon.ts): the
+   * service reads the mode and elevation from this file, and the core writes
+   * its output to logFile because the agent cannot read its stdout.
+   */
+  service?: { logFile: string };
 }
 
 export function settingsIni(o: SettingsInput): string {
   const lines = [
     "[core]",
     `computerName=${o.mode === "server" ? SERVER_SCREEN : CLIENT_SCREEN}`,
+    // Settings::CoreMode: 1 client, 2 server.
+    ...(o.service ? [`coreMode=${o.mode === "server" ? 2 : 1}`] : []),
     `port=${o.port}`,
     // Server: listen on loopback only; the peer link is the only way in.
     ...(o.mode === "server" ? ["interface=127.0.0.1"] : []),
@@ -62,8 +70,10 @@ export function settingsIni(o: SettingsInput): string {
     "[log]",
     // Debug includes connection and screen-switch lines; keystrokes are only logged at Verbose.
     "level=Debug",
-    "toFile=false",
+    ...(o.service ? ["toFile=true", `file=${iniString(o.service.logFile)}`] : ["toFile=false"]),
     "",
+    // Run as SYSTEM, so admin windows and permission prompts take input too.
+    ...(o.service ? ["[daemon]", "elevate=true", ""] : []),
   ];
   if (o.mode === "server") {
     if (!o.layoutFile) throw new Error("server settings need a layout file");
@@ -101,10 +111,11 @@ function keystroke(h: string): string {
 export function serverLayout(hotkeys: Hotkeys = HOTKEYS): string {
   return [
     "section: links",
+    // One way only: the gaming PC's left edge leads to the laptop, but no laptop
+    // edge leads back, so reaching the side of the laptop screen never switches.
+    // Coming back is the hotkey or Return to Gaming PC.
     `\t${SERVER_SCREEN}:`,
     `\t\tleft = ${CLIENT_SCREEN}`,
-    `\t${CLIENT_SCREEN}:`,
-    `\t\tright = ${SERVER_SCREEN}`,
     "end",
     "",
     "section: options",

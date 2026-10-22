@@ -126,10 +126,11 @@ test("peer link: connects with the paired key, carries requests, and tunnels byt
   const t = trustPair();
   const seen: PeerRequest[] = [];
   const links: string[] = [];
+  const pcSeen: PeerRequest[] = [];
   const pc = new PeerLink({
     machine: "gaming-pc", name: "PC", version: "0", trust: () => t.pc, bind: "127.0.0.1", port,
     tunnelTargets: { echo: echoPort },
-    onLink: (on) => links.push(`pc:${on}`), onRequest: async () => {}, onEvent: () => {},
+    onLink: (on) => links.push(`pc:${on}`), onRequest: async (r) => void pcSeen.push(r), onEvent: () => {},
   });
   const lap = new PeerLink({
     machine: "laptop", name: "LAP", version: "0", trust: () => t.lap, port,
@@ -143,6 +144,10 @@ test("peer link: connects with the paired key, carries requests, and tunnels byt
 
   await pc.request({ op: "input.prepare" });
   assert.deepEqual(seen, [{ op: "input.prepare" }]);
+  // The laptop can ask for input, and give it back, too.
+  await lap.request({ op: "input.take" }, 65_000);
+  await lap.request({ op: "input.return" });
+  assert.deepEqual(pcSeen, [{ op: "input.take" }, { op: "input.return" }]);
 
   const reply = await new Promise<string>((resolve, reject) => {
     const c = net.connect(tunnelLocal, "127.0.0.1", () => c.write("hello through the tunnel"));

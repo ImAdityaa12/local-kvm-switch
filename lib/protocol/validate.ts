@@ -32,6 +32,10 @@ export function parseCommand(raw: unknown): Parsed<Command> {
   if (!isObject(raw) || typeof raw.type !== "string") return fail("command must be an object with a type");
   const c = raw;
   switch (c.type) {
+    case "mode.set":
+      if (!onlyKeys(c, ["type", "mode"])) return fail("unexpected field");
+      if (!MACHINES.includes(c.mode as Machine)) return fail("mode must be gaming-pc or laptop");
+      return { ok: true, value: { type: c.type, mode: c.mode as Machine } };
     case "input.setTarget":
       if (!onlyKeys(c, ["type", "target"])) return fail("unexpected field");
       if (!MACHINES.includes(c.target as Machine)) return fail("target must be gaming-pc or laptop");
