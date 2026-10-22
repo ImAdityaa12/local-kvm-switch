@@ -311,7 +311,9 @@ Desk research results; see `docs/feasibility-report.md` and `docs/adr/`. Not yet
 - **Input Leap is archived** (read-only since 2026-07-26). Deskflow v1.27.0 is the candidate engine.
 - **Deskflow's server keeps global low-level keyboard/mouse hooks for its whole lifetime**, even when the
   cursor is on the server. Gaming PC mode is therefore defined as "the Deskflow server process is not
-  running", not "the cursor is on the gaming PC". This tightens §2.3 and §9.
+  running", not "the cursor is on the gaming PC". This tightens §2.3 and §9. The one exception is
+  switching at the screen edges (2026-10-22, ADR 0001), off by default: with it on, the server also
+  runs in Gaming PC mode, and the dashboard reports its hooks as installed.
 - Deskflow has **no documented API to switch screens**. Phase 1 ships the `switchToScreen` hotkey as the
   supported control; an automated dashboard button is a spike (§5 already allows this).
 - No user-mode API creates a capture endpoint. Default laptop mic endpoint: **VB-CABLE, installed by the

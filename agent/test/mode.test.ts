@@ -20,6 +20,8 @@ interface Opts {
   endpoint?: boolean;
   /** What the monitor shows at the start. */
   screen?: MonitorInput;
+  /** Switching at the screen edges is on. */
+  edge?: boolean;
 }
 
 async function setup(o: Opts = {}) {
@@ -33,7 +35,7 @@ async function setup(o: Opts = {}) {
   const initial: AgentState = {
     agent: { name: "t", machine: "gaming-pc", version: "0", protocol: 1, simulated: true, engines: { input: "simulated", audio: "simulated" }, lanAddress: null },
     peer: { link: "online", name: "L", pairing: null },
-    input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false },
+    input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false, ...(o.edge ? { edgeSwitch: true } : {}) },
     audio: {
       laptopToPc: { ...route, deviceId: devices.playback[0].id },
       micToLaptop: { ...route, deviceId: devices.capture[0].id, virtualEndpoint: await audio.virtualEndpoint() },
@@ -72,7 +74,7 @@ async function setup(o: Opts = {}) {
   });
   await runner.refreshMonitor();
   const steps = () => Object.fromEntries(store.state.mode!.steps.map((s) => [s.id, s.status])) as Record<ModeStepId, string>;
-  return { store, runner, controller, monitorCalls, layouts, steps, screen: () => screen, setOnline: (v: boolean) => (online = v), world };
+  return { store, runner, controller, input, monitorCalls, layouts, steps, screen: () => screen, setOnline: (v: boolean) => (online = v), world };
 }
 
 test("mode: Laptop mode sets Extend first, then HDMI 2, input, and both audio routes", async () => {
@@ -228,4 +230,46 @@ test("mode state survives the trip to the laptop, and junk is dropped", () => {
   });
   assert.equal(parseModeState({ ...mode, current: "toaster" }), null);
   assert.equal(parseModeState(null), null);
+});
+
+async function until(cond: () => boolean, what: string) {
+  for (let i = 0; i < 300 && !cond(); i++) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(cond(), what);
+}
+
+test("mode: with edge switching, Laptop mode restarts Deskflow after Extend, and the right edge brings the whole mode home", async () => {
+  const t = await setup({ edge: true });
+  await until(() => t.store.state.input.clientConnected, "waiting at the edges");
+  const seen: string[] = [];
+  t.store.subscribe((s) => seen.push(`${s.input.engine}/${s.mode?.laptopDisplay ?? "-"}/${t.layouts.length}`));
+  await t.controller.handle({ type: "mode.set", mode: "laptop" });
+  assert.equal(t.store.state.mode!.current, "laptop");
+  assert.equal(t.store.state.input.target, "laptop");
+  assert.equal(t.screen(), "hdmi2");
+  // Stopped before the laptop went to Extend, so its Deskflow starts again with the monitor.
+  const stoppedAt = seen.findIndex((x) => x.startsWith("stopped/"));
+  assert.ok(stoppedAt >= 0 && seen[stoppedAt].endsWith("/0"), `stopped before Extend: ${seen.join(" ")}`);
+
+  // The laptop's right edge in Laptop mode: the whole return, as the hotkey does.
+  t.input.cross("gaming-pc");
+  await until(() => t.store.state.mode!.current === "gaming-pc" && !t.store.state.mode!.pending, "back in Gaming PC mode");
+  assert.equal(t.screen(), "hdmi1");
+  assert.deepEqual(t.layouts, ["extend", "internal"]);
+  await until(() => t.store.state.input.clientConnected && t.store.state.input.engine === "running", "waiting at the edges again");
+  assert.equal(t.store.state.input.target, "gaming-pc");
+});
+
+test("mode: with edge switching, Deskflow at the edges is part of Gaming PC mode, but input on the laptop is not", async () => {
+  const t = await setup({ edge: true });
+  await until(() => t.store.state.input.clientConnected, "waiting at the edges");
+  t.store.update((s) => void (s.mode!.current = "gaming-pc"));
+  await t.controller.handle({ type: "mode.set", mode: "gaming-pc" });
+  assert.equal(t.store.state.input.engine, "running", "nothing to do: it was not stopped");
+  assert.deepEqual(t.monitorCalls, []);
+
+  // Over the edge to the laptop, then Gaming PC mode: the input comes home.
+  t.input.cross("laptop");
+  await t.controller.handle({ type: "mode.set", mode: "gaming-pc" });
+  assert.equal(t.store.state.input.target, "gaming-pc");
+  await until(() => t.store.state.input.clientConnected && t.store.state.input.engine === "running", "waiting at the edges again");
 });

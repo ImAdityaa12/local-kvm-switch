@@ -11,7 +11,7 @@ export function trayPath(repoRoot: string): string {
   return join(repoRoot, "native", "kvm-audio", "target", "release", "kvm-tray.exe");
 }
 
-export type TrayAction = "switch" | "return" | "dashboard";
+export type TrayAction = "switch" | "return" | "dashboard" | "resetAudio" | "edge";
 
 export interface TrayView {
   icon: "local" | "remote" | "busy" | "problem";
@@ -19,6 +19,10 @@ export interface TrayView {
   switchLabel: string;
   canSwitch: boolean;
   canReturn: boolean;
+  /** "Reset mic and speaker": the laptop's Windows default devices. */
+  resetAudio: boolean;
+  /** "Switch at screen edges", ticked when on; null hides it (not known yet). */
+  edgeSwitch: boolean | null;
 }
 
 /** What the icon shows. Grey: gaming PC has input; green: laptop; amber: switching; red: the other machine is unreachable. */
@@ -28,10 +32,19 @@ export function trayView(s: AgentState): TrayView {
   const remote = s.input.target === "laptop";
   const modePending = s.mode?.pending ?? null;
   const pending = s.input.pending?.target ?? modePending?.target ?? null;
-  const canReturn = remote || s.input.hooksActive || pending !== null;
+  // Deskflow waiting at the screen edges has nothing to return.
+  const canReturn = remote || (s.input.hooksActive && !s.input.edgeSwitch) || pending !== null;
   // Either machine can start the switch; the gaming PC presses the hotkey itself.
   const switchLabel = onGamingPc ? "Switch to laptop" : "Take keyboard and mouse";
-  const base = { switchLabel, canReturn, canSwitch: peerOnline && !remote && pending === null };
+  // Over the screen edge the input is on the laptop, but Laptop mode (monitor, audio) is still on offer.
+  const laptopMode = s.mode ? s.mode.current === "laptop" : remote;
+  const base = {
+    switchLabel,
+    canReturn,
+    canSwitch: peerOnline && !laptopMode && pending === null,
+    resetAudio: !onGamingPc,
+    edgeSwitch: s.input.edgeSwitch ?? null,
+  };
   if (pending === "laptop") {
     // Only when pressing it for the user did not work.
     const hotkey = s.input.pending?.step === "press-hotkey" && s.input.hotkeys ? `: press ${s.input.hotkeys.toLaptop}` : "";
@@ -71,7 +84,7 @@ export class Tray {
         } catch {
           continue;
         }
-        if (m.action === "switch" || m.action === "return" || m.action === "dashboard") onAction(m.action);
+        if (m.action === "switch" || m.action === "return" || m.action === "dashboard" || m.action === "resetAudio" || m.action === "edge") onAction(m.action);
         else if (m.event === "icon" && m.ok === false) onProblem("Windows did not accept the tray icon");
       }
     });

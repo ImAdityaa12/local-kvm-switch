@@ -305,3 +305,51 @@ test("laptop input: giving back still stops the client when the gaming PC cannot
   await li.deactivate();
   assert.equal(client.status.engine, "stopped");
 });
+
+test("with edge switching the laptop's right edge leads back; without it no laptop edge does", () => {
+  assert.doesNotMatch(serverLayout(), /\tlaptop:/);
+  const l = serverLayout(undefined, true);
+  assert.match(l, /\tgaming-pc:\r\n\t\tleft = laptop\r\n\tlaptop:\r\n\t\tright = gaming-pc\r\nend/);
+  assert.match(l, /keystroke\(control\+alt\+Right\) = switchToScreen\(gaming-pc\)/);
+});
+
+test("server engine: edge switching waits with the laptop connected, and the edges move the input with no switch asked for", async () => {
+  const { e, p, requests, reports } = engine("ok");
+  e.setEdges(true);
+  await e.standby();
+  assert.deepEqual(requests, ["input.prepare"]);
+  let last = reports.at(-1)!;
+  assert.equal(last.target, "gaming-pc", "the cursor stays here until it leaves the screen");
+  assert.equal(last.hooksActive, true);
+  assert.equal(last.clientConnected, true);
+  assert.match(readFileSync(join(p.dir, "deskflow-layout.conf"), "utf8"), /\tlaptop:\r\n\t\tright = gaming-pc/);
+
+  e.cursor("leave");
+  assert.equal(reports.at(-1)!.target, "laptop");
+  e.cursor("enter");
+  last = reports.at(-1)!;
+  assert.equal(last.target, "gaming-pc");
+  assert.equal(last.engine, "running", "coming back over the edge leaves Deskflow waiting");
+
+  // A switch from here only moves the cursor: no second server, no second prepare.
+  const done = e.activateRemote();
+  await new Promise((r) => setTimeout(r, 100));
+  e.cursor("leave");
+  await done;
+  assert.deepEqual(requests, ["input.prepare"]);
+  assert.equal(reports.at(-1)!.target, "laptop");
+  await e.deactivate();
+  assert.equal(reports.at(-1)!.hooksActive, false);
+  assert.deepEqual(requests, ["input.prepare", "input.release"]);
+});
+
+test("laptop client: a start while a stop is under way waits for it, then starts a fresh client", async () => {
+  const statuses: ClientStatus[] = [];
+  const c = new DeskflowClient(paths(), (s) => statuses.push({ ...s }));
+  await c.start();
+  const stopping = c.stop();
+  await c.start();
+  await stopping;
+  assert.equal(c.status.engine, "running", "not left stopped by the stop that was under way");
+  await c.stop();
+});

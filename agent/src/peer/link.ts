@@ -31,6 +31,8 @@ export type PeerRequest =
   /** Laptop → gaming PC: switch the keyboard and mouse to the laptop, or give them back. */
   | { op: "input.take" }
   | { op: "input.return" }
+  /** Laptop → gaming PC: turn switching at the screen edges on or off (the gaming PC keeps the setting). */
+  | { op: "input.setEdge"; enabled: boolean }
   /** Laptop → gaming PC: switch to Laptop or Gaming PC mode (mode.ts). */
   | { op: "mode.set"; mode: Machine }
   /** Gaming PC → laptop: set the laptop's display layout; answered once Windows reports it. */
@@ -43,6 +45,8 @@ export type PeerEvent =
   | { op: "input.status"; engine: InputEngineStatus; connected: boolean; entered: boolean }
   /** Gaming PC → laptop: the mode switch state, so the laptop's dashboard shows the same steps. */
   | { op: "mode.status"; mode: ModeState }
+  /** Gaming PC → laptop: whether switching at the screen edges is on. */
+  | { op: "edge.status"; enabled: boolean }
   /** Laptop → gaming PC: the laptop's current display layout. */
   | { op: "display.status"; topology: DisplayTopology }
   /** Laptop → gaming PC: the virtual microphone the laptop can feed. */
@@ -85,6 +89,7 @@ function parseRequest(m: Record<string, unknown>): PeerRequest | null {
   const body = m.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") return null;
   if (body.op === "input.prepare" || body.op === "input.release" || body.op === "input.take" || body.op === "input.return") return { op: body.op };
+  if (body.op === "input.setEdge" && typeof body.enabled === "boolean") return { op: "input.setEdge", enabled: body.enabled };
   if (body.op === "mode.set" && (body.mode === "laptop" || body.mode === "gaming-pc")) return { op: "mode.set", mode: body.mode };
   if (body.op === "display.setTopology" && (body.topology === "extend" || body.topology === "internal")) return { op: "display.setTopology", topology: body.topology };
   const route = body.route === "laptopToPc" || body.route === "micToLaptop" ? body.route : null;
@@ -161,6 +166,7 @@ function parseEvent(m: Record<string, unknown>): PeerEvent | null {
     const mode = parseModeState(b.mode);
     return mode ? { op: "mode.status", mode } : null;
   }
+  if (b?.op === "edge.status") return typeof b.enabled === "boolean" ? { op: "edge.status", enabled: b.enabled } : null;
   if (b?.op === "display.status") {
     return TOPOLOGIES.includes(b.topology as DisplayTopology) ? { op: "display.status", topology: b.topology as DisplayTopology } : null;
   }

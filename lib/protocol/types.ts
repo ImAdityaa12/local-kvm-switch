@@ -77,11 +77,17 @@ export interface InputState {
   engine: InputEngineStatus;
   /**
    * True only while an input-sharing process that installs global keyboard or
-   * mouse hooks is running. Must be false in Gaming PC mode.
+   * mouse hooks is running. Must be false in Gaming PC mode, unless the user
+   * turned on edgeSwitch.
    */
   hooksActive: boolean;
   /** The laptop's input client is connected to the engine. */
   clientConnected: boolean;
+  /**
+   * Switching at the screen edges (the gaming PC's setting; the laptop shows it). While on, the
+   * engine also runs in Gaming PC mode, so hooksActive is true there too. Absent from older agents.
+   */
+  edgeSwitch?: boolean;
   hotkeys?: Hotkeys;
   error?: AgentError;
 }
@@ -211,10 +217,14 @@ export type Command =
   | { type: "mode.set"; mode: Machine }
   | { type: "input.setTarget"; target: Machine }
   | { type: "input.returnLocal" }
+  /** Move the keyboard and mouse by leaving the screen: the gaming PC's left edge, the laptop's right edge. */
+  | { type: "input.setEdgeSwitch"; enabled: boolean }
   | { type: "audio.setEnabled"; route: RouteId; enabled: boolean }
   | { type: "audio.setDevice"; route: RouteId; deviceId: string }
   | { type: "audio.setVolume"; route: RouteId; volume: number }
   | { type: "audio.setMuted"; route: RouteId; muted: boolean }
+  /** Laptop: Windows' default speaker and mic to what Laptop mode uses while it is on, else the laptop's own. */
+  | { type: "audio.resetDevices" }
   | { type: "pairing.begin"; address?: string }
   | { type: "pairing.confirm"; accept: boolean }
   | { type: "pairing.cancel" }

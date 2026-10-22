@@ -10,7 +10,7 @@
 // Audio is not built yet (Phase 2); real mode reports it as unavailable.
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,6 +92,27 @@ function idleRoute() {
 const dir = dataDir();
 const name = hostname();
 
+/** Settings the user changes in the dashboard or tray, kept across restarts. */
+interface Settings {
+  /** Gaming PC: switching at the screen edges. */
+  edgeSwitch?: boolean;
+}
+const settingsFile = join(dir, "settings.json");
+
+function loadSettings(): Settings {
+  try {
+    const s = JSON.parse(readFileSync(settingsFile, "utf8")) as Settings;
+    return { edgeSwitch: s.edgeSwitch === true };
+  } catch {
+    return {};
+  }
+}
+
+function saveSettings(patch: Settings): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(settingsFile, JSON.stringify({ ...loadSettings(), ...patch }));
+}
+
 try {
   process.loadEnvFile(fileURLToPath(new URL("../../.env", import.meta.url)));
 } catch {
@@ -133,7 +154,7 @@ async function buildSimulated(): Promise<Built> {
     peer: values.unpaired
       ? { link: "unpaired", pairing: null }
       : { link: "online", name: "Laptop (simulated)", address: "192.0.2.24", lastSeenAt: Date.now(), pairing: null },
-    input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false, hotkeys: input.hotkeys },
+    input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false, edgeSwitch: false, hotkeys: input.hotkeys },
     audio: {
       laptopToPc: { ...idleRoute(), volume: 0.8, deviceId: devices.playback.find((d) => d.isDefault)?.id ?? null },
       micToLaptop: { ...idleRoute(), deviceId: devices.capture.find((d) => d.isDefault)?.id ?? null, virtualEndpoint: await audio.virtualEndpoint() },
@@ -212,7 +233,15 @@ async function buildReal(): Promise<Built> {
   const store = new Store({
     agent: { name, machine, version: VERSION, protocol: PROTOCOL_VERSION, simulated: false, engines: { input: "deskflow", audio: audio.kind }, lanAddress },
     peer: trusted ? { link: "offline", name: trusted.name, address: trusted.address ?? undefined, pairing: null } : { link: "unpaired", pairing: null },
-    input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false },
+    input: {
+      target: "gaming-pc",
+      pending: null,
+      engine: "stopped",
+      hooksActive: false,
+      clientConnected: false,
+      // The laptop learns it from the gaming PC (edge.status).
+      ...(machine === "gaming-pc" ? { edgeSwitch: loadSettings().edgeSwitch === true } : {}),
+    },
     audio: {
       laptopToPc: { ...idleRoute(), volume: 0.8, deviceId: devices.playback.find((d) => d.isDefault)?.id ?? null },
       micToLaptop: { ...idleRoute(), deviceId: devices.capture.find((d) => d.isDefault)?.id ?? null, virtualEndpoint: await audio.virtualEndpoint() },
@@ -221,7 +250,7 @@ async function buildReal(): Promise<Built> {
     events: [],
   });
   const laptopAudio =
-    machine === "laptop" && haveHelper ? new LaptopAudio(helperExe, (l, m) => store.log(l, m), (evt) => link.emit(evt)) : null;
+    machine === "laptop" && haveHelper ? new LaptopAudio(helperExe, (l, m) => store.log(l, m), (evt) => link.emit(evt), join(dir, "own-audio-devices.json")) : null;
   if (!haveHelper) store.log("warn", "The audio helper is not built, so audio routing is unavailable. Run npm run build:audio.");
 
   const paths = deskflowPaths();
@@ -285,6 +314,7 @@ async function buildReal(): Promise<Built> {
       // Each side tells the other what it knows: the laptop its display layout, the gaming PC the mode.
       if (online && machine === "laptop") void layout.get().then((topology) => link.emit({ op: "display.status", topology }), () => {});
       if (online && machine === "gaming-pc" && store.state.mode) link.emit({ op: "mode.status", mode: store.state.mode });
+      if (online && machine === "gaming-pc") link.emit({ op: "edge.status", enabled: store.state.input.edgeSwitch === true });
     },
     onRequest: async (req) => {
       if (req.op === "mode.set") {
@@ -308,6 +338,10 @@ async function buildReal(): Promise<Built> {
         const who = store.state.peer.name ?? "The laptop";
         store.log("info", req.op === "input.take" ? `${who} asked for the keyboard and mouse` : `${who} gave the keyboard and mouse back`);
         return controller.handle(req.op === "input.take" ? { type: "input.setTarget", target: "laptop" } : { type: "input.returnLocal" });
+      }
+      if (req.op === "input.setEdge") {
+        if (machine !== "gaming-pc") throw new EngineError({ code: "not-supported", message: "Only the gaming PC keeps the edge-switch setting." });
+        return controller.handle({ type: "input.setEdgeSwitch", enabled: req.enabled });
       }
       if (machine !== "laptop") throw new EngineError({ code: "not-supported", message: "Only the laptop takes these requests." });
       if (req.op === "audio.start" || req.op === "audio.stop" || req.op === "audio.volume") {
@@ -341,6 +375,14 @@ async function buildReal(): Promise<Built> {
         if (machine === "laptop") {
           store.update((s) => {
             s.mode = evt.mode;
+          });
+        }
+        return;
+      }
+      if (evt.op === "edge.status") {
+        if (machine === "laptop" && store.state.input.edgeSwitch !== evt.enabled) {
+          store.update((s) => {
+            s.input.edgeSwitch = evt.enabled;
           });
         }
         return;
@@ -410,7 +452,29 @@ async function buildReal(): Promise<Built> {
       return link.request({ op: "mode.set", mode }, 150_000);
     },
   };
-  const controller = new Controller({ store, input, audio, peer: events, pairing, mode: () => modeControl });
+  const resetDevices = laptopAudio
+    ? () => laptopAudio.resetDevices(store.state.mode?.current === "laptop" || store.state.mode?.pending?.target === "laptop")
+    : undefined;
+  const edge =
+    machine === "gaming-pc"
+      ? { saveEdgeSwitch: (on: boolean) => saveSettings({ edgeSwitch: on }) }
+      : {
+          askEdgeSwitch: (on: boolean) =>
+            link.online
+              ? link.request({ op: "input.setEdge", enabled: on }, 20_000)
+              : Promise.reject(new EngineError({ code: "peer-unreachable", message: "The gaming PC is not reachable; it keeps the edge-switch setting." })),
+        };
+  const controller = new Controller({ store, input, audio, peer: events, pairing, mode: () => modeControl, resetDevices, ...edge });
+  if (machine === "gaming-pc") {
+    // The laptop's dashboard and tray show the setting.
+    let sentEdge = store.state.input.edgeSwitch;
+    store.subscribe((s) => {
+      if (s.input.edgeSwitch !== sentEdge && link.online) {
+        sentEdge = s.input.edgeSwitch;
+        link.emit({ op: "edge.status", enabled: s.input.edgeSwitch === true });
+      }
+    });
+  }
   if (modeRunner) {
     // The laptop's dashboard shows the gaming PC's mode switch as it happens.
     let sent = "";
@@ -532,6 +596,15 @@ const tray = values["no-tray"]
       (action) => {
         if (action === "dashboard") {
           if (!openDashboard(link.toString())) store.log("warn", `No Chrome or Edge found. Open ${link.origin} with the link the agent printed.`);
+          return;
+        }
+        if (action === "edge") {
+          const enabled = !store.state.input.edgeSwitch;
+          controller.handle({ type: "input.setEdgeSwitch", enabled }).catch((e) => store.log("warn", `Could not turn ${enabled ? "on" : "off"} switching at the screen edges: ${e instanceof EngineError ? e.detail.message : String(e)}`));
+          return;
+        }
+        if (action === "resetAudio") {
+          controller.handle({ type: "audio.resetDevices" }).catch((e) => store.log("warn", `Could not reset the mic and speaker: ${e instanceof EngineError ? e.detail.message : String(e)}`));
           return;
         }
         // A whole mode switch: monitor, laptop display, input and audio. Failures show in the

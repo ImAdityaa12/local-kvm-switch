@@ -1,6 +1,7 @@
 //! kvm-audio: the native audio helper for LAN KVM Switcher.
 //!
 //!   kvm-audio list
+//!   kvm-audio set-default ID [ID]     make these endpoints Windows' default devices
 //!   kvm-audio send (--connect | --listen) ADDR [--device ID | --capture [ID] | --tone HZ] [--muted]
 //!   kvm-audio play (--listen | --connect) ADDR [--device ID | --wav PATH --seconds N] [--volume 0.8] [--muted]
 //!
@@ -74,6 +75,16 @@ fn run(args: &[String]) -> devices::Res<()> {
             emit(devices::list()?);
             Ok(())
         }
+        Some("set-default") => {
+            let ids = args[1..].to_vec();
+            if ids.is_empty() {
+                return Err("set-default needs at least one endpoint id".into());
+            }
+            devices::com_init()?;
+            devices::set_default(&ids)?;
+            emit(serde_json::json!({ "event": "default-set", "ids": ids }));
+            Ok(())
+        }
         Some("send") => {
             let link = link(args, send::Link::Connect, send::Link::Listen)?;
             let source = if let Some(hz) = arg(args, "--tone") {
@@ -101,6 +112,6 @@ fn run(args: &[String]) -> devices::Res<()> {
             };
             play::run(link, sink, ctl)
         }
-        _ => Err("usage: kvm-audio list | send (--connect|--listen) ADDR [--device ID | --capture [ID] | --tone HZ] [--muted] | play (--listen|--connect) ADDR [--device ID | --wav PATH --seconds N] [--volume V] [--muted]".into()),
+        _ => Err("usage: kvm-audio list | set-default ID [ID] | send (--connect|--listen) ADDR [--device ID | --capture [ID] | --tone HZ] [--muted] | play (--listen|--connect) ADDR [--device ID | --wav PATH --seconds N] [--volume V] [--muted]".into()),
     }
 }

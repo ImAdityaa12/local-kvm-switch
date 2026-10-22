@@ -55,8 +55,12 @@ Follow the parts in order. Parts 1–3 are done once; Part 4 is what you do each
       **extract** the zip.
    2. Right-click `VoicemeeterSetup.exe` → **Run as administrator** → **Install**.
    3. **Reboot.**
-   4. Settings → System → Sound → **Output** → **Voicemeeter Input (VB-Audio Voicemeeter VAIO)**.
-      The laptop's speakers go quiet; the agent sends what plays there to your IEM.
+   4. Nothing to choose in Sound settings: **Laptop mode sets the laptop's Output to Voicemeeter
+      Input (VB-Audio Voicemeeter VAIO) and its Input to CABLE Output (VB-Audio Virtual Cable)**,
+      and remembers your own speakers and microphone. The laptop's speakers go quiet; the agent
+      sends what plays there to your IEM. **Reset mic and speaker** (right-click the laptop's LAN
+      KVM tray icon, or the button on its dashboard) sets them again if something changed them in
+      Laptop mode, and puts back the laptop's own speakers and microphone otherwise.
    5. **Do not start the Voicemeeter app** (and if it shows in the tray, right-click → Exit): while
       it runs, it can play the sound on the speakers again. VB-CABLE A+B's **CABLE-A Input** works
       the same way if you have it.
@@ -221,11 +225,27 @@ switch.
 3. Press **Ctrl+Alt+Right**, or click **Gaming PC mode** (top right, on either dashboard), or
    **Return to Gaming PC** in the tray menu. Each one runs the whole of Gaming PC mode, monitor
    included. If the laptop disconnects, the gaming PC does the same on its own. Moving to the edge of
-   the laptop's screen never switches back on its own. The dashboard shows
+   the laptop's screen switches back only with **Switch at the screen edges** on (below). The dashboard shows
    **Input engine: Not running** and **Global input hooks: None installed**, and the log says
    *Local input confirmed. Input sharing stopped, no hooks installed.* That message is normal here.
 
 Switch back to the Gaming PC before starting a game with anti-cheat.
+
+### Switching at the screen edges (optional)
+
+Turn on **Switch at the screen edges** on either dashboard, or tick it in either tray menu. The
+gaming PC keeps the setting, so it stays on after a restart.
+
+- **Off the left edge of the gaming PC's screen:** the keyboard and mouse move to the laptop. Only
+  the input moves: the monitor stays on the gaming PC and you use the laptop on its own screen.
+- **Off the right edge of the laptop's screen:** they come back.
+- **In Laptop mode** the laptop's right edge does the whole of Gaming PC mode, monitor included, as
+  Ctrl+Alt+Right does.
+
+While it is on, Deskflow keeps running on the gaming PC **in Gaming PC mode too**, waiting at the
+edge with the laptop connected. The dashboard then shows **Global input hooks: Installed by the
+engine**. Turn it off before starting a game with anti-cheat. Also, in games with a visible cursor,
+a quick move to the left edge sends the keyboard and mouse to the laptop.
 
 ### Laptop sound in your IEM
 
@@ -260,7 +280,7 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 | Clicking **Laptop** never reaches *Press Ctrl+Alt+Left* (or Ctrl+Alt+Left does nothing), and the laptop's log says *Local input confirmed…* right after the switch starts | The laptop is running an older version that stopped its own Deskflow straight away. Update the laptop (`git pull`, Part 2) and restart the laptop agent. |
 | Laptop shows **Unreachable** | Same network? Correct `--bind` address on the gaming PC? Allowed Node.js through the firewall for **Private** networks? Network set to **Private**, not Public, in Windows settings? |
 | Pairing: "Could not reach …" | Open pairing on the gaming PC first; it stays open for two minutes. Check the address. |
-| "The laptop's sound output is "CABLE …", the microphone's cable", or the microphone fails with *0x8889000A* | On the laptop: Settings → System → Sound → Output → **Voicemeeter Input** (Part 1, step 6), or your speakers or headphones. Sound sent to "CABLE In 16ch" keeps the microphone from opening "CABLE Input". |
+| "The laptop's sound output is "CABLE …", the microphone's cable", or the microphone fails with *0x8889000A* | On the laptop: right-click the LAN KVM tray icon → **Reset mic and speaker** while in Laptop mode, or Settings → System → Sound → Output → **Voicemeeter Input** (Part 1, step 6), or your speakers or headphones. Sound sent to "CABLE In 16ch" keeps the microphone from opening "CABLE Input". |
 | "The laptop has no virtual microphone" | Install VB-CABLE on the laptop (Part 1, step 5), reboot, restart the laptop agent. |
 | "The audio helper is not built" | Put `kvm-audio.exe` in `native\kvm-audio\target\release\` (Part 2), restart the agent. |
 | Dashboard says **No agent** | The agent window was closed. Start it again and open the new link. |

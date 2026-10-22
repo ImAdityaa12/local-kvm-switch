@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cableIsDefaultError, findCable, HelperAudio, isCablePlayback, isSecondCable } from "../src/audio/engine.ts";
+import { cableIsDefaultError, findCable, HelperAudio, isCablePlayback, isSecondCable, isVirtualDevice, laptopModeDefaults, ownDefaults } from "../src/audio/engine.ts";
 import { EngineError } from "../src/engines.ts";
 import { HelperProcess, helperPath } from "../src/audio/helper.ts";
 
@@ -228,4 +228,58 @@ test("the mic's cable is found even after its endpoint was renamed", () => {
   assert.equal(isCablePlayback("Speakers (VB-Audio Virtual Cable)"), true);
   assert.equal(isCablePlayback("CABLE In 16 Ch (VB-Audio Virtual Cable)"), true);
   assert.equal(isSecondCable("Voicemeeter In 1 (VB-Audio Voicemeeter VAIO)"), true);
+});
+
+// This laptop's devices, with "CABLE Input" left as the default by the VB-CABLE installer.
+function laptopDevices(defaults: { playback: string; capture: string }) {
+  const mark = (dir: "playback" | "capture") => (name: string, i: number) => ({ id: `${dir}-${i}`, name, isDefault: name === defaults[dir] });
+  return {
+    playback: [
+      "CABLE Input (VB-Audio Virtual Cable)",
+      "Voicemeeter AUX Input (VB-Audio Voicemeeter VAIO)",
+      "Voicemeeter In 5 (VB-Audio Voicemeeter VAIO)",
+      "Voicemeeter Input (VB-Audio Voicemeeter VAIO)",
+      "CABLE In 16ch (VB-Audio Virtual Cable)",
+      "Speakers (Realtek(R) Audio)",
+      "G24F 2 (NVIDIA High Definition Audio)",
+    ].map(mark("playback")),
+    capture: [
+      "Voicemeeter Out A5 (VB-Audio Voicemeeter VAIO)",
+      "CABLE Output (VB-Audio Virtual Cable)",
+      "Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)",
+      "Microphone Array (Realtek(R) Audio)",
+    ].map(mark("capture")),
+  };
+}
+
+test("Laptop mode picks Voicemeeter Input and CABLE Output out of all the Voicemeeter devices", () => {
+  const d = laptopDevices({ playback: "CABLE Input (VB-Audio Virtual Cable)", capture: "Microphone Array (Realtek(R) Audio)" });
+  const want = laptopModeDefaults(d, {});
+  assert.equal(want.playback?.name, "Voicemeeter Input (VB-Audio Voicemeeter VAIO)");
+  assert.equal(want.capture?.name, "CABLE Output (VB-Audio Virtual Cable)");
+  assert.equal(isVirtualDevice("Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)"), true);
+  assert.equal(isVirtualDevice("Speakers (Realtek(R) Audio)"), false);
+});
+
+test("without a second cable, Laptop mode only moves the output off the mic's cable", () => {
+  const d = laptopDevices({ playback: "CABLE Input (VB-Audio Virtual Cable)", capture: "Microphone Array (Realtek(R) Audio)" });
+  const noVm = { ...d, playback: d.playback.filter((x) => !x.name.startsWith("Voicemeeter")) };
+  assert.equal(laptopModeDefaults(noVm, {}).playback?.name, "Speakers (Realtek(R) Audio)");
+  const onHdmi = laptopDevices({ playback: "G24F 2 (NVIDIA High Definition Audio)", capture: "" });
+  const hdmiNoVm = { ...onHdmi, playback: onHdmi.playback.filter((x) => !x.name.startsWith("Voicemeeter")) };
+  assert.equal(laptopModeDefaults(hdmiNoVm, {}).playback?.name, "G24F 2 (NVIDIA High Definition Audio)");
+});
+
+test("the laptop's own devices: the remembered ones, else its speakers and microphone, never a virtual one", () => {
+  const afterLaptopMode = laptopDevices({ playback: "Voicemeeter Input (VB-Audio Voicemeeter VAIO)", capture: "CABLE Output (VB-Audio Virtual Cable)" });
+  const guessed = ownDefaults(afterLaptopMode, {});
+  assert.equal(guessed.playback?.name, "Speakers (Realtek(R) Audio)");
+  assert.equal(guessed.capture?.name, "Microphone Array (Realtek(R) Audio)");
+  const hdmi = afterLaptopMode.playback.find((x) => x.name.startsWith("G24F"))!;
+  assert.equal(ownDefaults(afterLaptopMode, { playback: hdmi.id }).playback?.id, hdmi.id);
+  // A remembered device that was unplugged since.
+  assert.equal(ownDefaults(afterLaptopMode, { playback: "gone" }).playback?.name, "Speakers (Realtek(R) Audio)");
+  // A real device that is already the default stays.
+  const onHdmi = laptopDevices({ playback: "G24F 2 (NVIDIA High Definition Audio)", capture: "Microphone Array (Realtek(R) Audio)" });
+  assert.equal(ownDefaults(onHdmi, {}).playback?.isDefault, true);
 });

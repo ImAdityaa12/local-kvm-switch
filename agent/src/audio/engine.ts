@@ -10,6 +10,8 @@
 //   laptop:    kvm-audio play  --connect 127.0.0.1:24831  --device <CABLE Input>   ──tunnel "mic"──►
 //   Apps on the laptop record from "CABLE Output".
 
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { AgentError, AudioDevice, AudioFormat, RouteId, VirtualEndpointState } from "../../../lib/protocol/index.ts";
 import { EngineError, type AudioEngine, type RouteInfo } from "../engines.ts";
 import type { PeerEvent, PeerRequest } from "../peer/link.ts";
@@ -58,6 +60,44 @@ export function findCable<T extends { name: string }>(d: { playback: T[]; captur
  */
 export function isSecondCable(name: string): boolean {
   return /^Voicemeeter\b.*\bIn(put\b|\s)/i.test(name) || /^CABLE-[AB] In(put\b|\s)/i.test(name);
+}
+
+/** VB-Audio's virtual devices (VB-CABLE, Voicemeeter): never the laptop's own speakers or mic. */
+export function isVirtualDevice(name: string): boolean {
+  return /VB-Audio|^CABLE\b|^Voicemeeter\b/i.test(name);
+}
+
+type Endpoint = { id: string; name: string; isDefault: boolean };
+type Endpoints<T extends Endpoint> = { playback: T[]; capture: T[] };
+/** The laptop's own speakers and microphone (endpoint ids), as they were before Laptop mode changed them. */
+export interface OwnDevices {
+  playback?: string;
+  capture?: string;
+}
+
+function ownDevice<T extends Endpoint>(list: T[], savedId: string | undefined, preferred: RegExp): T | undefined {
+  const real = list.filter((x) => !isVirtualDevice(x.name));
+  return real.find((x) => x.isDefault) ?? real.find((x) => x.id === savedId) ?? real.find((x) => preferred.test(x.name)) ?? real[0];
+}
+
+/** Outside Laptop mode: the laptop's own speakers and microphone. */
+export function ownDefaults<T extends Endpoint>(d: Endpoints<T>, saved: OwnDevices): { playback?: T; capture?: T } {
+  return {
+    playback: ownDevice(d.playback, saved.playback, /^(Speakers|Headphones|Headset)\b/i),
+    capture: ownDevice(d.capture, saved.capture, /^(Microphone|Headset)\b/i),
+  };
+}
+
+/**
+ * Laptop mode: sound plays on Voicemeeter Input (or another second cable), so it reaches the IEM and
+ * not the speakers, and apps record from CABLE Output, the IEM mic. Without a second cable the
+ * output only changes when it is the mic's cable, and then to the laptop's own speakers.
+ */
+export function laptopModeDefaults<T extends Endpoint>(d: Endpoints<T>, saved: OwnDevices): { playback?: T; capture?: T } {
+  const def = d.playback.find((x) => x.isDefault);
+  const second = d.playback.find((x) => /^Voicemeeter Input\b/i.test(x.name)) ?? d.playback.find((x) => isSecondCable(x.name));
+  const playback = second ?? (def && isCablePlayback(def.name) ? ownDefaults(d, saved).playback : def);
+  return { playback, capture: findCable(d).output };
 }
 
 /** The laptop's output is the mic's cable: say what to choose instead. */
@@ -295,11 +335,75 @@ export class LaptopAudio {
   #emit: (evt: PeerEvent) => void;
   #sender: HelperProcess | null = null;
   #micPlayer: HelperProcess | null = null;
+  #ownFile: string | null;
 
-  constructor(exe: string, log: (level: "info" | "warn" | "error", msg: string) => void, emit: (evt: PeerEvent) => void) {
+  /** ownFile: where the laptop's own speakers and microphone are remembered across restarts. */
+  constructor(exe: string, log: (level: "info" | "warn" | "error", msg: string) => void, emit: (evt: PeerEvent) => void, ownFile: string | null = null) {
     this.#exe = exe;
     this.#log = log;
     this.#emit = emit;
+    this.#ownFile = ownFile;
+  }
+
+  /** Either route is running here. */
+  get routing(): boolean {
+    return !!(this.#sender?.running || this.#micPlayer?.running);
+  }
+
+  #loadOwn(): OwnDevices {
+    if (!this.#ownFile) return {};
+    try {
+      const o = JSON.parse(readFileSync(this.#ownFile!, "utf8")) as OwnDevices;
+      return { playback: typeof o.playback === "string" ? o.playback : undefined, capture: typeof o.capture === "string" ? o.capture : undefined };
+    } catch {
+      return {};
+    }
+  }
+
+  #saveOwn(own: OwnDevices): void {
+    if (!this.#ownFile) return;
+    try {
+      mkdirSync(dirname(this.#ownFile), { recursive: true });
+      writeFileSync(this.#ownFile, JSON.stringify(own));
+    } catch (e) {
+      this.#log("warn", `Could not remember the laptop's own speaker and microphone: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Sets Windows' default speaker and microphone: in Laptop mode the IEM's (Voicemeeter Input and
+   * CABLE Output), otherwise the laptop's own. Returns which of them changed.
+   */
+  async useDevices(laptopMode: boolean): Promise<{ playback: boolean; capture: boolean }> {
+    const d = await HelperProcess.list(this.#exe);
+    const saved = this.#loadOwn();
+    if (laptopMode) {
+      // Remember the laptop's own devices, to put them back with "Reset mic and speaker".
+      const next = { ...saved };
+      for (const dir of ["playback", "capture"] as const) {
+        const def = d[dir].find((x) => x.isDefault);
+        if (def && !isVirtualDevice(def.name)) next[dir] = def.id;
+      }
+      if (next.playback !== saved.playback || next.capture !== saved.capture) this.#saveOwn(next);
+    }
+    const want = laptopMode ? laptopModeDefaults(d, saved) : ownDefaults(d, saved);
+    const playback = want.playback && !want.playback.isDefault ? want.playback : undefined;
+    const capture = want.capture && !want.capture.isDefault ? want.capture : undefined;
+    if (!playback && !capture) return { playback: false, capture: false };
+    await HelperProcess.setDefault(this.#exe, [playback?.id, capture?.id].filter((x): x is string => !!x));
+    const set = [playback && `the speaker to ${playback.name}`, capture && `the microphone to ${capture.name}`].filter(Boolean).join(" and ");
+    this.#log("info", `${laptopMode ? "Laptop mode" : "Laptop's own devices"}: set ${set}`);
+    void this.announceEndpoint();
+    return { playback: !!playback, capture: !!capture };
+  }
+
+  /** "Reset mic and speaker": the devices Laptop mode needs while it is on, else the laptop's own. */
+  async resetDevices(laptopMode: boolean): Promise<void> {
+    const forLaptopMode = laptopMode || this.routing;
+    const changed = await this.useDevices(forLaptopMode);
+    // The sender records the output it started on, so follow the new one.
+    if (changed.playback && this.#sender?.running) await this.#startSend();
+    if (!changed.playback && !changed.capture) this.#log("info", `The speaker and microphone are already the ${forLaptopMode ? "ones Laptop mode uses" : "laptop's own"}`);
   }
 
   /** The virtual microphone apps can record from, if VB-CABLE is installed. */
@@ -337,8 +441,16 @@ export class LaptopAudio {
     this.#micPlayer?.command({ cmd: "volume", value: volume });
   }
 
+  /** A route is starting, so Laptop mode is on: Voicemeeter Input and CABLE Output become the defaults. */
+  async #useLaptopModeDevices(): Promise<void> {
+    await this.useDevices(true).catch((e) => {
+      this.#log("warn", `Could not set the laptop's speaker and microphone: ${e instanceof EngineError ? e.detail.message : String(e)}`);
+    });
+  }
+
   async #startSend(): Promise<void> {
     await this.stop("laptopToPc");
+    await this.#useLaptopModeDevices();
     // Never loop the virtual cable back to the gaming PC: it carries the mic,
     // so this would send your own voice back into your ears.
     const d = await HelperProcess.list(this.#exe);
@@ -362,6 +474,7 @@ export class LaptopAudio {
 
   async #startMic(volume: number): Promise<void> {
     await this.stop("micToLaptop");
+    await this.#useLaptopModeDevices();
     const ep = await this.endpoint();
     if (!ep.present || !ep.playbackId) {
       throw new EngineError({ code: "endpoint-missing", message: "VB-CABLE is not installed on the laptop.", hint: "Install it, reboot, and restart the agent." });

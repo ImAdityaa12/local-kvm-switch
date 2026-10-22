@@ -66,3 +66,37 @@ pub fn list() -> Res<serde_json::Value> {
         "capture": describe(Direction::Capture)?,
     }))
 }
+
+/// Makes these endpoints Windows' default devices, for every role (default and communications),
+/// as Settings → Sound does. Each id is a playback or a recording endpoint.
+///
+/// Windows has no public API for this. Sound settings use the undocumented IPolicyConfig, which
+/// has been stable since Windows 7: IUnknown's three methods, ten more, then SetDefaultEndpoint.
+pub fn set_default(ids: &[String]) -> Res<()> {
+    use std::ffi::c_void;
+    use windows::Win32::Media::Audio::{ERole, eCommunications, eConsole, eMultimedia};
+    use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
+    use windows::core::{GUID, HRESULT, IUnknown, Interface, PCWSTR};
+
+    const CLSID_POLICY_CONFIG: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
+    const IID_POLICY_CONFIG: GUID = GUID::from_u128(0xf8679f50_850a_41cf_9c72_430f290290c8);
+    const SET_DEFAULT_ENDPOINT: usize = 13;
+    type SetDefaultEndpoint = unsafe extern "system" fn(*mut c_void, PCWSTR, ERole) -> HRESULT;
+
+    unsafe {
+        let unknown: IUnknown = CoCreateInstance(&CLSID_POLICY_CONFIG, None, CLSCTX_ALL)?;
+        let mut raw = std::ptr::null_mut();
+        unknown.query(&IID_POLICY_CONFIG, &mut raw).ok()?;
+        // Owns the reference query added, and releases it on return.
+        let policy = IUnknown::from_raw(raw);
+        let vtable = *(policy.as_raw() as *const *const usize);
+        let set: SetDefaultEndpoint = std::mem::transmute(*vtable.add(SET_DEFAULT_ENDPOINT));
+        for id in ids {
+            let wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+            for role in [eConsole, eMultimedia, eCommunications] {
+                set(policy.as_raw(), PCWSTR(wide.as_ptr()), role).ok()?;
+            }
+        }
+    }
+    Ok(())
+}

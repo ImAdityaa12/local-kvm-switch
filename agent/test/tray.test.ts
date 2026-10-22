@@ -24,6 +24,7 @@ test("tray: grey on the gaming PC, and Switch to laptop is offered", () => {
   assert.equal(v.canSwitch, true);
   assert.equal(v.canReturn, false);
   assert.equal(v.switchLabel, "Switch to laptop");
+  assert.equal(v.resetAudio, false, "the gaming PC's own devices are left alone");
 });
 
 test("tray: amber while waiting for the hotkey, with the key to press", () => {
@@ -60,4 +61,25 @@ test("tray: the laptop can take the keyboard and mouse, and offers Return while 
   assert.equal(remote.status, "This laptop has the keyboard and mouse");
   assert.equal(remote.canReturn, true);
   assert.equal(remote.canSwitch, false);
+  assert.equal(remote.resetAudio, true);
+});
+
+test("tray: Deskflow waiting at the screen edges is not something to return, and the setting shows ticked", () => {
+  const waiting = trayView(state((s) => Object.assign(s.input, { edgeSwitch: true, engine: "running", hooksActive: true, clientConnected: true })));
+  assert.equal(waiting.icon, "local");
+  assert.equal(waiting.canReturn, false);
+  assert.equal(waiting.canSwitch, true);
+  assert.equal(waiting.edgeSwitch, true);
+  assert.equal(trayView(state()).edgeSwitch, null, "hidden until the setting is known");
+  const over = trayView(state((s) => Object.assign(s.input, { edgeSwitch: true, target: "laptop", engine: "running", hooksActive: true })));
+  assert.equal(over.icon, "remote");
+  assert.equal(over.canReturn, true);
+});
+
+test("tray: over the screen edge, Laptop mode is still offered; in Laptop mode it is not", () => {
+  const mode = { current: "gaming-pc" as const, pending: null, target: null, steps: [], monitor: null, monitorControl: true, laptopDisplay: null };
+  const over = trayView(state((s) => ((s.mode = { ...mode }), Object.assign(s.input, { edgeSwitch: true, target: "laptop", engine: "running", hooksActive: true }))));
+  assert.equal(over.canSwitch, true);
+  const inMode = trayView(state((s) => ((s.mode = { ...mode, current: "laptop" }), Object.assign(s.input, { target: "laptop", engine: "running", hooksActive: true }))));
+  assert.equal(inMode.canSwitch, false);
 });

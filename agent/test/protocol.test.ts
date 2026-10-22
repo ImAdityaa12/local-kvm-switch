@@ -9,6 +9,10 @@ test("accepts well-formed commands", () => {
     value: { type: "input.setTarget", target: "laptop" },
   });
   assert.equal(parseCommand({ type: "audio.setVolume", route: "micToLaptop", volume: 0.5 }).ok, true);
+  assert.deepEqual(parseCommand({ type: "audio.resetDevices" }), { ok: true, value: { type: "audio.resetDevices" } });
+  assert.deepEqual(parseCommand({ type: "input.setEdgeSwitch", enabled: true }), { ok: true, value: { type: "input.setEdgeSwitch", enabled: true } });
+  assert.equal(parseCommand({ type: "input.setEdgeSwitch", enabled: "yes" }).ok, false);
+  assert.equal(parseCommand({ type: "audio.resetDevices", route: "micToLaptop" }).ok, false);
 });
 
 test("rejects unknown fields, routes, and out-of-range values", () => {

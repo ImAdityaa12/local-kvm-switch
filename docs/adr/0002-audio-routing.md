@@ -58,6 +58,18 @@ system-wide capture endpoint; new kernel drivers need Microsoft signing.
 - Verified on one machine (VB-CABLE installed, silent virtual source): the route streams at 48 kHz
   stereo float with no conversion and no dropouts; mute at the sender produces exact zeros.
 
+## Default devices (2026-10-22)
+
+- When either route starts on the laptop (Laptop mode), the laptop makes **Voicemeeter Input** (else
+  another second cable) its default output and **CABLE Output** its default input, for every role.
+  Without a second cable the output only changes when it is the mic's cable. The laptop's own
+  (non-VB-Audio) defaults are remembered in `own-audio-devices.json` in the data folder.
+- **Reset mic and speaker** (laptop tray menu, laptop dashboard, command `audio.resetDevices`) sets
+  those again in Laptop mode, or while a route runs, and the laptop's own devices otherwise. When
+  the output changes while sending, the sender restarts on the new output.
+- `kvm-audio set-default ID…` uses the undocumented `IPolicyConfig::SetDefaultEndpoint`, the same
+  interface Sound settings use; Windows has no public API for it.
+
 ## Consequences
 
 - One reboot on the laptop for VB-CABLE. Organisations need VB-Audio licences.

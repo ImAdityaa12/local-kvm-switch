@@ -69,6 +69,16 @@ export class HelperProcess {
     });
   }
 
+  /** Makes these endpoints Windows' default playback / recording devices (every role). */
+  static async setDefault(exe: string, ids: string[]): Promise<void> {
+    const h = HelperProcess.spawn(exe, ["set-default", ...ids]);
+    return new Promise((resolve, reject) => {
+      h.on("default-set", () => resolve());
+      h.on("error", (e) => reject(new EngineError({ code: e.code === "engine-missing" ? "engine-missing" : "internal", message: `Windows did not change the default device: ${String(e.message)}` })));
+      h.exited.then(() => reject(new EngineError({ code: "internal", message: "The audio helper did not change the default device." })));
+    });
+  }
+
   on(event: string, fn: (e: HelperEvent) => void): void {
     const list = this.#handlers.get(event) ?? [];
     list.push(fn);
