@@ -188,7 +188,9 @@ To stop, press **Ctrl+C**.
 
 ## Part 5: Use it
 
-Audio devices are chosen on the **gaming PC dashboard**. Switching modes works from either machine.
+Audio routes, devices, volume and mute can be set from either dashboard: the gaming PC runs them, and
+the laptop's dashboard shows and changes the same routes while the gaming PC is reachable. Switching
+modes works from either machine.
 
 ### Laptop mode and Gaming PC mode
 
@@ -265,7 +267,7 @@ a quick move to the left edge sends the keyboard and mouse to the laptop.
 2. Turn the switch on.
 3. On the laptop, in Discord: **Settings → Voice & Video → Input Device → CABLE Output (VB-Audio
    Virtual Cable)** → **Let's Check**.
-4. **Mute** on the gaming PC dashboard silences the mic before it leaves the PC.
+4. **Mute** (on either dashboard) silences the mic before it leaves the gaming PC.
 
 ### Clipboard and files
 

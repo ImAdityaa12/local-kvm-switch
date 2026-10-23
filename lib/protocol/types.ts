@@ -241,6 +241,11 @@ export interface AgentState {
     micToLaptop: RouteState & { virtualEndpoint: VirtualEndpointState };
   };
   devices: { playback: AudioDevice[]; capture: AudioDevice[] };
+  /**
+   * Laptop: "gaming-pc" while audio and devices mirror the gaming PC's routes (it owns them), and
+   * the dashboard's audio commands go to it. Absent while the gaming PC is unreachable, and elsewhere.
+   */
+  audioFrom?: "gaming-pc";
   /** Absent from agents older than clipboard and file sharing. */
   sharing?: SharingState;
   events: AgentEvent[];

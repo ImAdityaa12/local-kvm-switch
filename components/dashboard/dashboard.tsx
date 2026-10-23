@@ -108,7 +108,20 @@ function Connected({
       ) : null}
 
       {state.agent.machine === "laptop" ? <LaptopInput state={state} send={send} /> : <TargetSwitch state={state} send={send} />}
-      {state.agent.machine === "laptop" ? <LaptopAudio state={state} send={send} /> : state.agent.engines.audio === "none" ? <AudioLater /> : <AudioSection state={state} send={send} now={now} />}
+      {state.agent.machine === "laptop" ? (
+        // The gaming PC's routes, controlled from here, while it is reachable.
+        state.audioFrom ? (
+          <AudioSection state={state} send={send} now={now}>
+            <ResetAudio state={state} send={send} className="mt-2 bg-surface-1 px-5 py-5 sm:px-6" />
+          </AudioSection>
+        ) : (
+          <LaptopAudio state={state} send={send} />
+        )
+      ) : state.agent.engines.audio === "none" ? (
+        <AudioLater />
+      ) : (
+        <AudioSection state={state} send={send} now={now} />
+      )}
       <SharingPanel state={state} send={send} now={now} />
 
       <div className="mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
@@ -204,7 +217,25 @@ function LaptopInput({ state, send }: { state: AgentState; send: (c: Command) =>
   );
 }
 
+/** Before the gaming PC's routes are known here (it is unreachable, or older): what happens, and Reset. */
 function LaptopAudio({ state, send }: { state: AgentState; send: (c: Command) => Promise<unknown> }) {
+  return (
+    <section aria-labelledby="audio-heading" className="rise mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" style={{ "--i": 2 } as React.CSSProperties}>
+      <h2 id="audio-heading" className="text-title leading-tight font-semibold tracking-[-0.03em]">
+        Sound goes both ways
+      </h2>
+      <div>
+        <p className="max-w-[60ch] text-lg text-ink-2">
+          When the gaming PC turns on its laptop audio route, this laptop sends everything it plays, unchanged. When it turns on the microphone route, your IEM mic plays into CABLE Input and apps here record it from CABLE Output. The gaming PC runs both; they can be controlled here too while it is reachable.
+        </p>
+        <ResetAudio state={state} send={send} className="mt-4" />
+      </div>
+    </section>
+  );
+}
+
+/** Laptop: Windows' default speaker and mic. */
+function ResetAudio({ state, send, className }: { state: AgentState; send: (c: Command) => Promise<unknown>; className?: string }) {
   const [resetting, setResetting] = useState(false);
   const laptopMode = state.mode?.current === "laptop" || state.mode?.pending?.target === "laptop";
   const reset = async () => {
@@ -216,33 +247,25 @@ function LaptopAudio({ state, send }: { state: AgentState; send: (c: Command) =>
     }
   };
   return (
-    <section aria-labelledby="audio-heading" className="rise mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" style={{ "--i": 2 } as React.CSSProperties}>
-      <h2 id="audio-heading" className="text-title leading-tight font-semibold tracking-[-0.03em]">
-        Sound goes both ways
-      </h2>
-      <div>
-        <p className="max-w-[60ch] text-lg text-ink-2">
-          When the gaming PC turns on its laptop audio route, this laptop sends everything it plays, unchanged. When it turns on the microphone route, your IEM mic plays into CABLE Input and apps here record it from CABLE Output. Both are controlled from the gaming PC&apos;s dashboard.
-        </p>
-        <p className="mt-4 max-w-[60ch] text-lg text-ink-2">
-          Laptop mode sets this laptop&apos;s speaker to Voicemeeter Input and its microphone to CABLE Output. Reset puts them back to {laptopMode ? "those, if something changed them" : "the laptop's own speakers and microphone"}.
-        </p>
-        <button
-          type="button"
-          onClick={reset}
-          disabled={resetting}
-          className="press mt-6 h-11 bg-surface-1 px-5 font-medium hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {resetting ? (
-            <Status tone="idle" busy className="[&>span:first-child]:bg-current">
-              Resetting
-            </Status>
-          ) : (
-            "Reset mic and speaker"
-          )}
-        </button>
-      </div>
-    </section>
+    <div className={cn("flex flex-wrap items-center justify-between gap-x-6 gap-y-4", className)}>
+      <p className="max-w-[60ch] text-lg text-ink-2">
+        Laptop mode sets this laptop&apos;s speaker to Voicemeeter Input and its microphone to CABLE Output. Reset puts them back to {laptopMode ? "those, if something changed them" : "the laptop's own speakers and microphone"}.
+      </p>
+      <button
+        type="button"
+        onClick={reset}
+        disabled={resetting}
+        className="press h-11 shrink-0 bg-surface-2 px-5 font-medium hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {resetting ? (
+          <Status tone="idle" busy className="[&>span:first-child]:bg-current">
+            Resetting
+          </Status>
+        ) : (
+          "Reset mic and speaker"
+        )}
+      </button>
+    </div>
   );
 }
 

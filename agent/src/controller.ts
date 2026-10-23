@@ -2,6 +2,7 @@
 // truthful: nothing is marked done until the engine confirms it.
 
 import type { AgentError, Command, Machine, RouteId } from "../../lib/protocol/index.ts";
+import { isAudioCommand, type AudioCommand } from "./audio/mirror.ts";
 import { EngineError, type AudioEngine, type InputEngine } from "./engines.ts";
 import type { Store } from "./store.ts";
 
@@ -57,6 +58,8 @@ export interface ControllerDeps {
   askEdgeSwitch?: (on: boolean) => Promise<void>;
   /** Clipboard and file sharing (sharing/); absent where they are not built. */
   sharing?: SharingControl;
+  /** Laptop: the gaming PC owns the audio routes, so the dashboard's audio commands go to it. */
+  remoteAudio?: (cmd: AudioCommand) => Promise<void>;
   sim?: Simulation;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
@@ -162,6 +165,7 @@ export class Controller {
 
   async handle(cmd: Command): Promise<void> {
     const { store } = this.#d;
+    if (this.#d.remoteAudio && isAudioCommand(cmd)) return this.#d.remoteAudio(cmd);
     switch (cmd.type) {
       case "mode.set": {
         const mode = this.#d.mode?.();

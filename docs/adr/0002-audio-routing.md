@@ -74,3 +74,12 @@ system-wide capture endpoint; new kernel drivers need Microsoft signing.
 
 - One reboot on the laptop for VB-CABLE. Organisations need VB-Audio licences.
 - No driver of our own unless the spike shows no acceptable alternative and the user approves it.
+
+## Revised 2026-10-23: controlled from the laptop too
+
+The gaming PC still owns both routes. It sends its audio state (routes and device lists) to the
+laptop as `audio.state`, at most every 250 ms because level meters change constantly. The laptop's
+dashboard shows the same two routes, and sends its audio commands (on/off, device, volume, mute)
+back as `audio.command`. The gaming PC checks each one exactly as it checks its own dashboard's
+commands, then runs it (`agent/src/audio/mirror.ts`). The laptop shows a change only once the
+gaming PC confirms it, and drops the mirrored state as soon as the link goes down.

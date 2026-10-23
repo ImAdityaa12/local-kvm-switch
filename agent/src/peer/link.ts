@@ -19,6 +19,7 @@ import net from "node:net";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import type { AgentError, AudioFormat, DisplayTopology, InputEngineStatus, Machine, ModeState, ModeStepId, ModeStepStatus, RouteId } from "../../../lib/protocol/index.ts";
+import { parseAudioCommand, parseAudioMirror, type AudioCommand, type AudioMirror } from "../audio/mirror.ts";
 import { EngineError } from "../engines.ts";
 import { makeRateLimiter } from "../rate-limit.ts";
 import { answerDiscovery, findGamingPc, isLanPeer, lookupName } from "./discovery.ts";
@@ -52,7 +53,9 @@ export type PeerRequest =
   | { op: "display.setTopology"; topology: "extend" | "internal" }
   | { op: "audio.start"; route: RouteId; volume?: number }
   | { op: "audio.stop"; route: RouteId }
-  | { op: "audio.volume"; route: "micToLaptop"; volume: number };
+  | { op: "audio.volume"; route: "micToLaptop"; volume: number }
+  /** Laptop → gaming PC: an audio command from the laptop's dashboard (audio/mirror.ts). */
+  | { op: "audio.command"; command: AudioCommand };
 
 export type PeerEvent =
   | { op: "input.status"; engine: InputEngineStatus; connected: boolean; entered: boolean }
@@ -62,6 +65,8 @@ export type PeerEvent =
   | { op: "edge.status"; enabled: boolean }
   /** Laptop → gaming PC: the laptop's current display layout. */
   | { op: "display.status"; topology: DisplayTopology }
+  /** Gaming PC → laptop: its audio routes and devices, for the laptop's dashboard (audio/mirror.ts). */
+  | { op: "audio.state"; mirror: AudioMirror }
   /** Either way: the drives this machine offers the other (sharing/files.ts); null for none. */
   | { op: "files.status"; serving: string[] | null }
   /** Laptop → gaming PC: the virtual microphone the laptop can feed. */
@@ -112,6 +117,10 @@ function parseRequest(m: Record<string, unknown>): PeerRequest | null {
   if (!body || typeof body !== "object") return null;
   if (body.op === "input.prepare" || body.op === "input.release" || body.op === "input.take" || body.op === "input.return") return { op: body.op };
   if (body.op === "input.setEdge" && typeof body.enabled === "boolean") return { op: "input.setEdge", enabled: body.enabled };
+  if (body.op === "audio.command") {
+    const command = parseAudioCommand(body.command);
+    return command ? { op: "audio.command", command } : null;
+  }
   if (body.op === "mode.set" && (body.mode === "laptop" || body.mode === "gaming-pc")) return { op: "mode.set", mode: body.mode };
   if (body.op === "display.setTopology" && (body.topology === "extend" || body.topology === "internal")) return { op: "display.setTopology", topology: body.topology };
   const route = body.route === "laptopToPc" || body.route === "micToLaptop" ? body.route : null;
@@ -189,6 +198,10 @@ function parseEvent(m: Record<string, unknown>): PeerEvent | null {
     return mode ? { op: "mode.status", mode } : null;
   }
   if (b?.op === "edge.status") return typeof b.enabled === "boolean" ? { op: "edge.status", enabled: b.enabled } : null;
+  if (b?.op === "audio.state") {
+    const mirror = parseAudioMirror(b.mirror);
+    return mirror ? { op: "audio.state", mirror } : null;
+  }
   if (b?.op === "files.status") {
     if (b.serving === null) return { op: "files.status", serving: null };
     const drives = Array.isArray(b.serving) && b.serving.length <= 26 && b.serving.every((d) => typeof d === "string" && /^[A-Z]$/.test(d)) ? (b.serving as string[]) : null;

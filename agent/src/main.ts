@@ -28,6 +28,7 @@ import { DAEMON_PIPE, daemonRequest, daemonRunning } from "./deskflow/daemon.ts"
 import { NullAudio } from "./null-audio.ts";
 import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudio, MIC_SEND_PORT, MIC_TUNNEL_PORT } from "./audio/engine.ts";
 import { helperPath } from "./audio/helper.ts";
+import { MIRROR_EVERY_MS, type AudioCommand } from "./audio/mirror.ts";
 import { CLIPBOARD_TARGET, ClipboardShare, clipHelperPath } from "./sharing/clipboard.ts";
 import { FILES_TARGET, FILES_SERVE_PORT, FILES_TUNNEL_PORT, FileShare, initialFilesState, pathMap } from "./sharing/files.ts";
 import { lanAddresses } from "./peer/discovery.ts";
@@ -307,6 +308,25 @@ async function buildReal(): Promise<Built> {
         s.sharing!.clipboard.available = available;
       }),
   });
+  // Gaming PC: its audio routes for the laptop's dashboard, at most every MIRROR_EVERY_MS (meters
+  // change constantly). Only when it can route audio at all.
+  let sentAudio = "";
+  let audioTimer: ReturnType<typeof setTimeout> | null = null;
+  let audioAt = 0;
+  const sendAudio = (force: boolean) => {
+    if (!helperAudio || !link.online || audioTimer) return;
+    if (!force && JSON.stringify([store.state.audio, store.state.devices]) === sentAudio) return;
+    audioTimer = setTimeout(
+      () => {
+        audioTimer = null;
+        if (!link.online) return;
+        sentAudio = JSON.stringify([store.state.audio, store.state.devices]);
+        audioAt = Date.now();
+        link.emit({ op: "audio.state", mirror: { audio: store.state.audio, devices: store.state.devices } });
+      },
+      force ? 0 : Math.max(0, MIRROR_EVERY_MS - (Date.now() - audioAt)),
+    );
+  };
   const laptopAudio =
     machine === "laptop" && haveHelper ? new LaptopAudio(helperExe, (l, m) => store.log(l, m), (evt) => link.emit(evt), join(dir, "own-audio-devices.json")) : null;
   if (!haveHelper) store.log("warn", "The audio helper is not built, so audio routing is unavailable. Run npm run build:audio.");
@@ -383,6 +403,15 @@ async function buildReal(): Promise<Built> {
       }
       events.fire(online, info.error);
       filesShare.linkChanged(online);
+      // The laptop shows the gaming PC's audio only while it can hear from it.
+      if (!online && machine === "laptop" && store.state.audioFrom) {
+        store.update((s) => {
+          s.audio = { laptopToPc: idleRoute(), micToLaptop: { ...idleRoute(), virtualEndpoint: s.audio.micToLaptop.virtualEndpoint } };
+          s.devices = { playback: [], capture: [] };
+          delete s.audioFrom;
+        });
+      }
+      if (online && machine === "gaming-pc") sendAudio(true);
       if (online) void laptopAudio?.announceEndpoint();
       // Each side tells the other what it knows: the laptop its display layout, the gaming PC the mode.
       if (online && machine === "laptop") void layout.get().then((topology) => link.emit({ op: "display.status", topology }), () => {});
@@ -390,6 +419,11 @@ async function buildReal(): Promise<Built> {
       if (online && machine === "gaming-pc") link.emit({ op: "edge.status", enabled: store.state.input.edgeSwitch === true });
     },
     onRequest: async (req) => {
+      if (req.op === "audio.command") {
+        // The laptop's dashboard, controlling routes this PC owns.
+        if (machine !== "gaming-pc") throw new EngineError({ code: "not-supported", message: "Only the gaming PC runs the audio routes." });
+        return controller.handle(req.command);
+      }
       if (req.op === "mode.set") {
         if (!modeRunner) throw new EngineError({ code: "not-supported", message: "Only the gaming PC switches modes." });
         store.log("info", `${store.state.peer.name ?? "The laptop"} asked for ${req.mode === "laptop" ? "Laptop" : "Gaming PC"} mode`);
@@ -469,6 +503,15 @@ async function buildReal(): Promise<Built> {
         return;
       }
       if (evt.op === "files.status") return filesShare.peerServing(evt.serving);
+      if (evt.op === "audio.state") {
+        if (machine !== "laptop") return;
+        store.update((s) => {
+          s.audio = evt.mirror.audio;
+          s.devices = evt.mirror.devices;
+          s.audioFrom = "gaming-pc";
+        });
+        return;
+      }
       if (!helperAudio) return;
       if (evt.op === "audio.endpoint") {
         const ep = { present: evt.present, name: evt.name ?? undefined, isDefault: evt.isDefault };
@@ -550,7 +593,15 @@ async function buildReal(): Promise<Built> {
     setFiles: (on) => filesShare.setEnabled(on),
     openDrive: () => filesShare.openDrive(),
   };
-  const controller = new Controller({ store, input, audio, peer: events, pairing, mode: () => modeControl, resetDevices, sharing, ...edge });
+  const remoteAudio =
+    machine === "laptop"
+      ? (command: AudioCommand) =>
+          link.online
+            ? // Starting a route waits for this laptop to start sending, and may retry.
+              link.request({ op: "audio.command", command }, 30_000)
+            : Promise.reject(new EngineError({ code: "peer-unreachable", message: "The gaming PC is not reachable; it runs the audio routes." }))
+      : undefined;
+  const controller = new Controller({ store, input, audio, peer: events, pairing, mode: () => modeControl, resetDevices, sharing, remoteAudio, ...edge });
   if (machine === "gaming-pc") {
     // The laptop's dashboard and tray show the setting.
     let sentEdge = store.state.input.edgeSwitch;
@@ -561,6 +612,7 @@ async function buildReal(): Promise<Built> {
       }
     });
   }
+  if (machine === "gaming-pc") store.subscribe(() => sendAudio(false));
   if (modeRunner) {
     // The laptop's dashboard shows the gaming PC's mode switch as it happens.
     let sent = "";
