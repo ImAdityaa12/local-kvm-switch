@@ -6,6 +6,7 @@ import type { Machine } from "../../../lib/protocol/index.ts";
 import type { Pairing } from "../controller.ts";
 import { EngineError } from "../engines.ts";
 import type { Store } from "../store.ts";
+import { isLanPeer } from "./discovery.ts";
 import { frameChannel } from "./frames.ts";
 import { PairingSession, type PairResult } from "./pairing.ts";
 import type { TrustStore } from "./trust.ts";
@@ -18,7 +19,10 @@ export interface PairingManagerOptions {
   name: string;
   store: Store;
   trust: TrustStore;
+  /** Gaming PC: address the pairing window listens on; 0.0.0.0 for every adapter. Only LAN peers are accepted. */
   bind?: string;
+  /** Gaming PC: the address to show for the laptop to type, when it is not bind. */
+  address?: () => string | null;
   port?: number;
   /** Called after a successful pairing has been saved. */
   onPaired(peer: { name: string; address: string | null }): void;
@@ -46,7 +50,7 @@ export class PairingManager implements Pairing {
 
     if (this.#o.machine === "gaming-pc") {
       await this.#openWindow();
-      this.#setPairing({ stage: "listening", expiresAt, address: this.#o.bind ?? null });
+      this.#setPairing({ stage: "listening", expiresAt, address: this.#shownAddress() });
       this.#o.store.log("info", "Pairing window open for two minutes");
       return;
     }
@@ -95,8 +99,17 @@ export class PairingManager implements Pairing {
     this.#o.trust.forget();
   }
 
+  /** What the laptop should type: the pinned address, else the one this PC has now. */
+  #shownAddress(): string | null {
+    return this.#o.bind && this.#o.bind !== "0.0.0.0" ? this.#o.bind : (this.#o.address?.() ?? null);
+  }
+
   #openWindow(): Promise<void> {
     const server = net.createServer((sock) => {
+      if (!isLanPeer(sock.remoteAddress)) {
+        sock.destroy();
+        return;
+      }
       if (this.#session) {
         sock.destroy(); // one pairing at a time
         return;
@@ -153,7 +166,7 @@ export class PairingManager implements Pairing {
           sock.destroy();
           this.#o.store.log("warn", `Pairing attempt failed: ${reason}`);
           const expiresAt = this.#o.store.state.peer.pairing?.expiresAt ?? Date.now();
-          this.#setPairing({ stage: "listening", expiresAt, address: this.#o.bind ?? null });
+          this.#setPairing({ stage: "listening", expiresAt, address: this.#shownAddress() });
           return;
         }
         this.#end("warn", `Pairing failed: ${reason}`);

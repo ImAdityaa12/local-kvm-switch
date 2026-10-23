@@ -2,11 +2,16 @@
 // truthful: nothing is marked done until the engine confirms it.
 
 import type { AgentError, Command, Machine, RouteId } from "../../lib/protocol/index.ts";
+import { isAudioCommand, type AudioCommand } from "./audio/mirror.ts";
 import { EngineError, type AudioEngine, type InputEngine } from "./engines.ts";
 import type { Store } from "./store.ts";
 
 export const SWITCH_TIMEOUT_MS = 10_000;
 export const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000];
+/** Edge switching: how long to wait before starting Deskflow again after it failed, growing each time. */
+export const STANDBY_RETRY_MS = [5_000, 15_000, 60_000];
+/** Edge switching: how long Deskflow may take to start with the laptop connected. */
+const STANDBY_TIMEOUT_MS = 30_000;
 
 export interface Pairing {
   /** Gaming PC: open a pairing window. Laptop: dial the gaming PC at `address`. */
@@ -30,6 +35,13 @@ export interface ModeControl {
   peerLost?(): void;
 }
 
+export interface SharingControl {
+  setClipboard(on: boolean): Promise<void>;
+  setFiles(on: boolean): Promise<void>;
+  /** Opens the other machine's drive in Explorer. */
+  openDrive(): Promise<void>;
+}
+
 export interface ControllerDeps {
   store: Store;
   /** Set later than the controller is built, so it can run the controller's own commands. */
@@ -38,6 +50,16 @@ export interface ControllerDeps {
   audio: AudioEngine;
   peer: { onLink(cb: (online: boolean, error?: AgentError) => void): void };
   pairing: Pairing;
+  /** Laptop: sets Windows' default speaker and mic (LaptopAudio.resetDevices). */
+  resetDevices?: () => Promise<void>;
+  /** Gaming PC: remembers switching at the screen edges across restarts. */
+  saveEdgeSwitch?: (on: boolean) => void;
+  /** Laptop: the gaming PC keeps the edge-switch setting, so this asks it. */
+  askEdgeSwitch?: (on: boolean) => Promise<void>;
+  /** Clipboard and file sharing (sharing/); absent where they are not built. */
+  sharing?: SharingControl;
+  /** Laptop: the gaming PC owns the audio routes, so the dashboard's audio commands go to it. */
+  remoteAudio?: (cmd: AudioCommand) => Promise<void>;
   sim?: Simulation;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
@@ -74,6 +96,10 @@ export class Controller {
   #clearTimer: (h: unknown) => void;
   #retryTimers: Partial<Record<RouteId, unknown>> = {};
   #switching: Promise<void> = Promise.resolve();
+  /** Edge switching: Deskflow is starting to wait at the edges, or is waiting there with the laptop connected. */
+  #standby: "starting" | "up" | null = null;
+  #standbyFails = 0;
+  #standbyRetry: unknown = null;
 
   constructor(deps: ControllerDeps) {
     this.#d = deps;
@@ -97,17 +123,25 @@ export class Controller {
         // A switch in progress logs its own failure.
         this.#d.store.log("error", `Input engine: ${error.message}`);
       }
-      // Gaming PC mode never keeps an engine with global hooks alive. If the
-      // cursor came home by hotkey or screen edge, stop the engine. Only the
-      // gaming PC decides this: the laptop's client is started and stopped by
-      // the gaming PC, and sits idle (target gaming-pc) until the hotkey.
+      // Gaming PC mode never keeps an engine with global hooks alive, unless the
+      // user turned on edge switching. If the cursor came home by hotkey or
+      // screen edge, stop the engine. Only the gaming PC decides this: the
+      // laptop's client is started and stopped by the gaming PC, and sits idle
+      // (target gaming-pc) until the hotkey.
       const s = this.#d.store.state.input;
       const owner = this.#d.store.state.agent.machine === "gaming-pc";
       if (owner && s.target === "gaming-pc" && s.hooksActive && s.pending === null && s.engine === "running") {
         // In Laptop mode the return also brings the monitor and audio home.
-        if (!this.#d.mode?.()?.cursorHome?.()) this.#serialSwitch("gaming-pc").catch(() => {});
+        if (!this.#d.mode?.()?.cursorHome?.() && !s.edgeSwitch) this.#serialSwitch("gaming-pc").catch(() => {});
       }
     });
+
+    if (deps.store.state.agent.machine === "gaming-pc" && deps.input.standby) {
+      deps.input.setEdges?.(deps.store.state.input.edgeSwitch === true);
+      // Edge switching waits again once a mode switch is over, or the laptop is back.
+      deps.store.subscribe(() => this.#keepStandby());
+      this.#keepStandby();
+    }
 
     deps.peer.onLink((online, error) => this.#onPeerLink(online, error));
 
@@ -131,6 +165,7 @@ export class Controller {
 
   async handle(cmd: Command): Promise<void> {
     const { store } = this.#d;
+    if (this.#d.remoteAudio && isAudioCommand(cmd)) return this.#d.remoteAudio(cmd);
     switch (cmd.type) {
       case "mode.set": {
         const mode = this.#d.mode?.();
@@ -147,6 +182,9 @@ export class Controller {
           await this.#d.input.deactivate().catch(() => {});
         }
         return this.#serialSwitch("gaming-pc");
+      case "input.setEdgeSwitch":
+        if (this.#d.askEdgeSwitch) return this.#d.askEdgeSwitch(cmd.enabled);
+        return this.#setEdgeSwitch(cmd.enabled);
       case "audio.setEnabled":
         return cmd.enabled ? this.#startRoute(cmd.route) : this.#stopRoute(cmd.route, "Turned off");
       case "audio.setDevice": {
@@ -174,6 +212,19 @@ export class Controller {
           s.audio[cmd.route].muted = cmd.muted;
         });
         return;
+      case "audio.resetDevices": {
+        const reset = this.#d.resetDevices;
+        if (!reset) throw new EngineError({ code: "not-supported", message: "Only the laptop agent, with its audio helper built, resets its mic and speaker." });
+        return reset();
+      }
+      case "sharing.setClipboard":
+      case "sharing.setFiles":
+      case "files.open": {
+        const sharing = this.#d.sharing;
+        if (!sharing) throw new EngineError({ code: "not-supported", message: "This agent does not share the clipboard or files." });
+        if (cmd.type === "files.open") return sharing.openDrive();
+        return cmd.type === "sharing.setClipboard" ? sharing.setClipboard(cmd.enabled) : sharing.setFiles(cmd.enabled);
+      }
       case "pairing.begin":
         if (store.state.peer.link !== "unpaired") {
           throw new EngineError({ code: "bad-request", message: "Unpair the current device before pairing a new one." });
@@ -207,6 +258,102 @@ export class Controller {
         return;
       }
     }
+  }
+
+  async #setEdgeSwitch(on: boolean): Promise<void> {
+    const { store, input } = this.#d;
+    if (!input.standby) throw new EngineError({ code: "not-supported", message: "This input engine cannot switch at the screen edges." });
+    if (store.state.input.edgeSwitch === on) return;
+    input.setEdges?.(on);
+    this.#d.saveEdgeSwitch?.(on);
+    this.#standbyFails = 0;
+    if (this.#standbyRetry !== null) this.#clearTimer(this.#standbyRetry);
+    this.#standbyRetry = null;
+    store.update((s) => {
+      s.input.edgeSwitch = on;
+    });
+    // A running server keeps the layout it started with.
+    const onLaptop = store.state.input.target === "laptop" || store.state.mode?.current === "laptop";
+    store.log(
+      "info",
+      on
+        ? `Switching at the screen edges is on: this screen's left edge leads to the laptop, the laptop's right edge back${onLaptop ? " (from the next switch to the laptop)" : ""}`
+        : `Switching at the screen edges is off${onLaptop ? "; the laptop's edge still leads back until the keyboard and mouse are here" : ""}`,
+    );
+    if (on) return this.#keepStandby();
+    // Waiting at the edges is no longer wanted. If Deskflow is still starting, it stops as it reports in.
+    const s = store.state;
+    if (s.input.target === "gaming-pc" && s.input.pending === null && s.input.engine !== "stopped" && s.mode?.current !== "laptop" && !s.mode?.pending) {
+      await this.#serialSwitch("gaming-pc");
+    }
+  }
+
+  /** Edge switching: Deskflow waits at the screen edges whenever nothing else is using it. */
+  #standbyWanted(): boolean {
+    const s = this.#d.store.state;
+    return (
+      s.input.edgeSwitch === true &&
+      s.peer.link === "online" &&
+      s.input.engine === "stopped" &&
+      s.input.pending === null &&
+      s.input.target === "gaming-pc" &&
+      !s.mode?.pending &&
+      s.mode?.current !== "laptop"
+    );
+  }
+
+  /** Runs on every state change on the gaming PC: starts Deskflow at the edges when it should be, and again after it dropped. */
+  #keepStandby(): void {
+    const { store, input } = this.#d;
+    const s = store.state;
+    if (!input.standby) return;
+    if (this.#standby === "up") {
+      if (s.input.engine !== "running") this.#standby = null;
+      else if (!s.input.clientConnected && s.input.target === "gaming-pc" && s.input.pending === null) {
+        // The laptop's Deskflow went away (it stopped, or its agent restarted): start over.
+        this.#standby = null;
+        store.log("warn", "The laptop's Deskflow disconnected; edge switching starts it again");
+        this.#serialSwitch("gaming-pc").catch(() => {});
+        return;
+      }
+    }
+    if (this.#standby !== null || this.#standbyRetry !== null || !this.#standbyWanted()) return;
+    this.#standby = "starting";
+    const run = this.#switching.then(async () => {
+      // Something else may have started while this waited its turn.
+      if (!this.#standbyWanted()) return false;
+      try {
+        await withTimeout(input.standby!(), STANDBY_TIMEOUT_MS, "Edge switching");
+      } catch (e) {
+        // Leave nothing half-started.
+        await input.deactivate().catch(() => {});
+        throw e;
+      }
+      return true;
+    });
+    this.#switching = run.then(
+      () => {},
+      () => {},
+    );
+    run.then(
+      (started) => {
+        this.#standby = started ? "up" : null;
+        if (started && this.#standbyFails > 0) store.log("info", "Edge switching is working again");
+        if (started) this.#standbyFails = 0;
+        this.#keepStandby();
+      },
+      (e) => {
+        this.#standby = null;
+        const delay = STANDBY_RETRY_MS[Math.min(this.#standbyFails, STANDBY_RETRY_MS.length - 1)];
+        // Said once; the retries go on quietly.
+        if (this.#standbyFails === 0) store.log("warn", `Edge switching could not start Deskflow: ${asAgentError(e).message}. It keeps trying.`);
+        this.#standbyFails++;
+        this.#standbyRetry = this.#setTimer(() => {
+          this.#standbyRetry = null;
+          this.#keepStandby();
+        }, delay);
+      },
+    );
   }
 
   /** Switches run one at a time; a return-to-local queued behind a remote switch still runs. */
@@ -293,10 +440,11 @@ export class Controller {
     }
     if (!online && prev === "online") {
       store.log("warn", `${who} disconnected${error ? `: ${error.message}` : ""}`);
-      if (store.state.input.target === "laptop" || store.state.input.pending?.target === "laptop") {
-        store.log("warn", "Returning keyboard and mouse to the Gaming PC");
-        this.#serialSwitch("gaming-pc").catch(() => {});
-      }
+      const remote = store.state.input.target === "laptop" || store.state.input.pending?.target === "laptop";
+      if (remote) store.log("warn", "Returning keyboard and mouse to the Gaming PC");
+      // Also Deskflow waiting at the edges: its laptop is gone. It starts again when the laptop is back.
+      const owner = store.state.agent.machine === "gaming-pc";
+      if (remote || (owner && store.state.input.hooksActive)) this.#serialSwitch("gaming-pc").catch(() => {});
       this.#d.mode?.()?.peerLost?.();
     }
   }

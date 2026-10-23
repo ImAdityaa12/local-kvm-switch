@@ -9,6 +9,9 @@
 // Gaming PC mode: input → local, audio routes off, monitor → HDMI 1, laptop → PC screen only.
 //   The laptop leaves Extend only once the monitor has confirmed HDMI 1; otherwise the monitor
 //   would show nothing at all.
+//
+// With switching at the screen edges on, the controller starts Deskflow again after Gaming PC
+// mode, waiting at the edges; crossing an edge then moves only the keyboard and mouse.
 
 import type { AgentError, Command, Machine, ModeState, ModeStep, ModeStepId, ModeStepStatus, RouteId } from "../../lib/protocol/index.ts";
 import { EngineError } from "./engines.ts";
@@ -149,7 +152,8 @@ export class ModeRunner {
   /** Already in that mode, but something drifted (e.g. input came home by hotkey). */
   #needsWork(target: Machine): boolean {
     const s = this.#d.store.state;
-    return target === "laptop" ? s.input.target !== "laptop" : s.input.target !== "gaming-pc" || s.input.hooksActive;
+    // With edge switching on, Deskflow waiting at the edges belongs to Gaming PC mode.
+    return target === "laptop" ? s.input.target !== "laptop" : s.input.target !== "gaming-pc" || (s.input.hooksActive && !s.input.edgeSwitch);
   }
 
   #step(id: ModeStepId, status: ModeStepStatus, detail?: string): void {
@@ -202,6 +206,12 @@ export class ModeRunner {
 
   async #toLaptop(): Promise<void> {
     const { laptop, monitor } = this.#d;
+    // 0. Edge switching keeps Deskflow running in Gaming PC mode, and the laptop's Deskflow
+    //    only reads its desktop's size as it starts. Stop both, so they start again after
+    //    Extend and the cursor reaches the monitor (main.ts, input.prepare).
+    if (this.#d.store.state.input.edgeSwitch) await this.#d.run({ type: "input.returnLocal" }).catch(() => {});
+    this.#checkCancel();
+
     // 1. Laptop display: Extend, so HDMI 2 carries a picture before the monitor shows it.
     if (!laptop.online()) this.#fail("laptop-display", "The laptop is not reachable", "Check that the laptop agent is running and on the same network.");
     this.#step("laptop-display", "running");

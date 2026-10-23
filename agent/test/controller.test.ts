@@ -5,7 +5,7 @@ import { Controller } from "../src/controller.ts";
 import { Store } from "../src/store.ts";
 import { SimAudio, SimInput, SimPairing, SimWorld } from "../src/sim/world.ts";
 
-async function setup(opts: { unpaired?: boolean; endpoint?: boolean } = {}) {
+async function setup(opts: { unpaired?: boolean; endpoint?: boolean; edge?: boolean } = {}) {
   const world = new SimWorld(5);
   world.endpointPresent = opts.endpoint ?? true;
   const input = new SimInput(world);
@@ -15,7 +15,7 @@ async function setup(opts: { unpaired?: boolean; endpoint?: boolean } = {}) {
   const initial: AgentState = {
     agent: { name: "t", machine: "gaming-pc", version: "0", protocol: 1, simulated: true, engines: { input: "simulated", audio: "simulated" }, lanAddress: null },
     peer: opts.unpaired ? { link: "unpaired", pairing: null } : { link: "online", name: "L", pairing: null },
-    input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false },
+    input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false, ...(opts.edge !== undefined ? { edgeSwitch: opts.edge } : {}) },
     audio: {
       laptopToPc: { ...route, deviceId: devices.playback[0].id },
       micToLaptop: { ...route, deviceId: devices.capture[0].id, virtualEndpoint: await audio.virtualEndpoint() },
@@ -25,6 +25,7 @@ async function setup(opts: { unpaired?: boolean; endpoint?: boolean } = {}) {
   };
   const store = new Store(initial);
   const timers: (() => void)[] = [];
+  const saved: boolean[] = [];
   const controller = new Controller({
     store,
     input,
@@ -32,6 +33,7 @@ async function setup(opts: { unpaired?: boolean; endpoint?: boolean } = {}) {
     peer: world.peer,
     pairing: new SimPairing(world, store, () => {}),
     sim: world,
+    saveEdgeSwitch: (on) => void saved.push(on),
     setTimer: (fn) => timers.push(fn),
     clearTimer: () => {},
   });
@@ -41,7 +43,7 @@ async function setup(opts: { unpaired?: boolean; endpoint?: boolean } = {}) {
       await new Promise((r) => setTimeout(r, 30));
     }
   };
-  return { world, store, controller, audio, runTimers };
+  return { world, store, controller, audio, input, saved, runTimers };
 }
 
 test("gaming PC mode has no hooks and switching to laptop is confirmed, not optimistic", async () => {
@@ -180,5 +182,66 @@ test("the laptop keeps its idle client running until the gaming PC releases it",
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(stops, 0);
   assert.equal(store.state.input.engine, "running");
+  audio.dispose();
+});
+
+async function until(cond: () => boolean, what: string) {
+  for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(cond(), what);
+}
+
+test("edge switching: Deskflow waits at the edges in Gaming PC mode, and the edges move only the input", async () => {
+  const { store, input, audio } = await setup({ edge: true });
+  await until(() => store.state.input.clientConnected, "waiting at the edges with the laptop connected");
+  assert.equal(store.state.input.target, "gaming-pc");
+  assert.equal(store.state.input.hooksActive, true);
+  assert.equal(store.state.input.pending, null);
+
+  input.cross("laptop");
+  assert.equal(store.state.input.target, "laptop");
+  input.cross("gaming-pc");
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(store.state.input.target, "gaming-pc");
+  assert.equal(store.state.input.engine, "running", "coming home over the edge keeps it waiting");
+  audio.dispose();
+});
+
+test("edge switching off: Deskflow stops, the setting is saved, and coming home stops it again", async () => {
+  const { store, controller, input, saved, audio } = await setup({ edge: true });
+  await until(() => store.state.input.clientConnected, "waiting at the edges");
+  await controller.handle({ type: "input.setEdgeSwitch", enabled: false });
+  assert.deepEqual(saved, [false]);
+  assert.equal(store.state.input.edgeSwitch, false);
+  assert.equal(store.state.input.engine, "stopped");
+  assert.equal(store.state.input.hooksActive, false);
+
+  // Without edge switching, the cursor coming home stops the engine, as before.
+  await controller.handle({ type: "input.setTarget", target: "laptop" });
+  input.cross("gaming-pc");
+  await until(() => store.state.input.engine === "stopped", "engine stopped after the cursor came home");
+  assert.equal(store.state.input.hooksActive, false);
+
+  await controller.handle({ type: "input.setEdgeSwitch", enabled: true });
+  assert.deepEqual(saved, [false, true]);
+  await until(() => store.state.input.clientConnected, "waiting at the edges again");
+  audio.dispose();
+});
+
+test("edge switching: the laptop going away stops Deskflow, and it waits again when the laptop is back", async () => {
+  const { world, store, audio } = await setup({ edge: true });
+  await until(() => store.state.input.clientConnected, "waiting at the edges");
+  world.setPeerReachable(false);
+  await until(() => store.state.input.engine === "stopped", "stopped while the laptop is away");
+  assert.equal(store.state.input.hooksActive, false);
+  world.setPeerReachable(true);
+  await until(() => store.state.input.clientConnected, "waiting at the edges once the laptop is back");
+  audio.dispose();
+});
+
+test("without edge switching nothing waits at the edges in Gaming PC mode", async () => {
+  const { store, audio } = await setup({ edge: false });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(store.state.input.engine, "stopped");
+  assert.equal(store.state.input.hooksActive, false);
   audio.dispose();
 });

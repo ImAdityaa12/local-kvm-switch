@@ -107,15 +107,19 @@ function keystroke(h: string): string {
     .join("+");
 }
 
-/** Links and hotkeys only: the computers themselves are declared in the server settings. */
-export function serverLayout(hotkeys: Hotkeys = HOTKEYS): string {
+/**
+ * Links and hotkeys only: the computers themselves are declared in the server settings.
+ * edges: switching at the screen edges is on, so the laptop's right edge leads back too.
+ */
+export function serverLayout(hotkeys: Hotkeys = HOTKEYS, edges = false): string {
   return [
     "section: links",
-    // One way only: the gaming PC's left edge leads to the laptop, but no laptop
-    // edge leads back, so reaching the side of the laptop screen never switches.
-    // Coming back is the hotkey or Return to Gaming PC.
+    // Without edge switching the link is one way: no laptop edge leads back, so
+    // reaching the side of the laptop screen never switches by accident. Coming
+    // back is the hotkey or Return to Gaming PC.
     `\t${SERVER_SCREEN}:`,
     `\t\tleft = ${CLIENT_SCREEN}`,
+    ...(edges ? [`\t${CLIENT_SCREEN}:`, `\t\tright = ${SERVER_SCREEN}`] : []),
     "end",
     "",
     "section: options",

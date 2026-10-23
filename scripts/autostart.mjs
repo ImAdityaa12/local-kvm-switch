@@ -2,7 +2,7 @@
 // terminal and no Next.js server, and adds a "LAN KVM" shortcut that opens the
 // dashboard in a small app window only when you need it.
 //
-//   node scripts/autostart.mjs install --machine gaming-pc [--bind IP] [--port 47820]
+//   node scripts/autostart.mjs install --machine gaming-pc [--port 47820]   (--bind IP pins one address; not needed)
 //   node scripts/autostart.mjs install --machine laptop
 //   node scripts/autostart.mjs stop        stop the background agent until the next sign-in
 //   node scripts/autostart.mjs remove      stop it and undo install

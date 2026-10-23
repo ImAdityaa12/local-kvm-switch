@@ -43,6 +43,13 @@ export interface InputEngine {
   deactivate(): Promise<void>;
   /** Engine-observed state changes, including unexpected exits. */
   onReport(cb: (report: InputReport, error?: AgentError) => void): void;
+  /**
+   * Switching at the screen edges: start sharing with the cursor staying here, so moving it off
+   * the edge reaches the laptop. Resolves once the laptop is connected. Gaming PC only.
+   */
+  standby?(): Promise<void>;
+  /** Whether the laptop's edge leads back; applies from the next start. */
+  setEdges?(on: boolean): void;
 }
 
 export interface PeerLinkEvents {

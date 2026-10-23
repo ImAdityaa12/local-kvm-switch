@@ -38,8 +38,21 @@ while the cursor is on the server.
   gaming PC; the screen edges follow the same layout). When the cursor comes back by hotkey or
   edge, the agent stops the server, so Gaming PC mode again has no Deskflow process.
 
+- Added 2026-10-22: **switching at the screen edges**, off by default, which the user turns on.
+  While it is on, the controller keeps the server running in Gaming PC mode too, with the laptop's
+  client connected and the cursor on the gaming PC (`standby()`), and the layout adds the laptop's
+  right edge back to the gaming PC. Crossing an edge then moves only the keyboard and mouse; the
+  monitor, display layout and audio stay as they are. Coming home over the edge leaves the server
+  waiting. In Laptop mode the right edge runs the whole of Gaming PC mode, as the hotkey does.
+  Laptop mode first stops the waiting server and client, because the laptop's Deskflow reads its
+  desktop's size only as it starts and would miss the monitor that Extend adds. The setting lives
+  on the gaming PC (`settings.json` in its data folder); the laptop shows and changes it over the
+  peer link (`input.setEdge`, `edge.status`). This is the one case where Gaming PC mode has global
+  input hooks, and the dashboard says so.
+
 ## Consequences
 
 - Switching to Laptop costs a process start (expected ~1 s; to measure).
-- Edge-of-screen switching only works while Laptop mode is active, which is the intent.
+- Edge-of-screen switching only works while Laptop mode is active, unless the user turns on
+  switching at the screen edges.
 - Deskflow must be installed separately (or bundled later under GPL terms with source offer).

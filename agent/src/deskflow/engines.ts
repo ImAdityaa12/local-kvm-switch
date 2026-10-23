@@ -2,6 +2,8 @@
 //
 // Gaming PC: the server process exists only while Laptop is selected, because
 // Deskflow keeps global keyboard/mouse hooks for as long as its server runs.
+// The exception is switching at the screen edges, which the user turns on: then
+// it also runs in Gaming PC mode, waiting for the cursor to leave the screen.
 // Laptop: the client process runs while the gaming PC asks for it.
 //
 // Where the cursor is comes from Deskflow's own enter/exit commands
@@ -58,11 +60,11 @@ export function hiddenCommand(args: string[]): string[] {
   return [wscript, "//B", "//Nologo", runner, ...args].map((a) => a.replace(/\\/g, "/"));
 }
 
-function writeFiles(p: DeskflowPaths, mode: "server" | "client", service = false): string {
+function writeFiles(p: DeskflowPaths, mode: "server" | "client", service = false, edges = false): string {
   mkdirSync(p.dir, { recursive: true });
   const settingsFile = join(p.dir, `deskflow-${mode}.conf`);
   const layoutFile = join(p.dir, "deskflow-layout.conf").replace(/\\/g, "/");
-  if (mode === "server") writeFileSync(layoutFile, serverLayout(HOTKEYS));
+  if (mode === "server") writeFileSync(layoutFile, serverLayout(HOTKEYS, edges));
   const notify = (event: CursorEvent) => commandLine(service ? hiddenCommand(p.notifyCommand(event)) : p.notifyCommand(event));
   writeFileSync(
     settingsFile,
@@ -144,6 +146,8 @@ export class DeskflowServerInput implements InputEngine {
   #stopping = false;
   /** Bumped by deactivate(), so an activation in flight knows it was cancelled. */
   #gen = 0;
+  /** Switching at the screen edges: the laptop's right edge leads back (config.ts). */
+  #edges = false;
 
   /** Presses a hotkey on this machine (hotkey.ts); without it the user presses it. */
   #press: ((hotkey: string) => Promise<void>) | undefined;
@@ -166,8 +170,12 @@ export class DeskflowServerInput implements InputEngine {
     this.#cb(this.#state, error);
   }
 
-  async activateRemote(): Promise<void> {
-    const gen = ++this.#gen;
+  setEdges(on: boolean): void {
+    this.#edges = on;
+  }
+
+  /** Readies the laptop, starts the server and waits for the laptop to connect. */
+  async #startServer(gen: number): Promise<void> {
     const cancelled = () => {
       if (gen !== this.#gen) throw new EngineError({ code: "engine-crashed", message: "Switch cancelled" });
     };
@@ -178,9 +186,8 @@ export class DeskflowServerInput implements InputEngine {
     cancelled();
 
     this.#report({ step: "starting-engine", engine: "starting" });
-    const settings = writeFiles(this.#p, "server");
+    const settings = writeFiles(this.#p, "server", false, this.#edges);
     const connected = this.#connected.wait();
-    const onLaptop = this.#onLaptop.wait();
     this.#stopping = false;
     this.#proc = new CoreProcess({
       exe: this.#p.exe,
@@ -199,7 +206,26 @@ export class DeskflowServerInput implements InputEngine {
 
     await connected;
     cancelled();
-    this.#report({ clientConnected: true, step: this.#press ? "moving-cursor" : "press-hotkey" });
+    this.#report({ clientConnected: true });
+  }
+
+  async standby(): Promise<void> {
+    if (this.#proc?.running) return;
+    await this.#startServer(++this.#gen);
+  }
+
+  async activateRemote(): Promise<void> {
+    const gen = ++this.#gen;
+    const cancelled = () => {
+      if (gen !== this.#gen) throw new EngineError({ code: "engine-crashed", message: "Switch cancelled" });
+    };
+    // Running for edge switching but without the laptop: start over. With the laptop
+    // connected, only the cursor has to move.
+    if (this.#proc?.running && !this.#state.clientConnected) await this.#stopServer();
+    cancelled();
+    const onLaptop = this.#onLaptop.wait();
+    if (!this.#proc?.running) await this.#startServer(gen);
+    this.#report({ step: this.#press ? "moving-cursor" : "press-hotkey" });
     if (this.#press) {
       // Press the hotkey for the user; if the cursor has not moved soon after, ask them to.
       const press = this.#press;
@@ -232,6 +258,11 @@ export class DeskflowServerInput implements InputEngine {
 
   async deactivate(): Promise<void> {
     this.#gen++;
+    await this.#stopServer();
+    this.#peer.request({ op: "input.release" }).catch(() => {});
+  }
+
+  async #stopServer(): Promise<void> {
     const proc = this.#proc;
     if (proc?.running) {
       this.#stopping = true;
@@ -240,14 +271,19 @@ export class DeskflowServerInput implements InputEngine {
     }
     this.#proc = null;
     this.#report({ target: "gaming-pc", engine: "stopped", hooksActive: false, clientConnected: false });
-    this.#peer.request({ op: "input.release" }).catch(() => {});
   }
 
   /** From the notifier: the cursor entered or left the gaming PC. */
   cursor(event: CursorEvent): void {
     if (!this.#proc?.running) return;
-    if (event === "leave") this.#onLaptop.done();
+    if (event === "leave") this.#cursorLeft();
     else if (this.#state.target === "laptop") this.#report({ target: "gaming-pc" });
+  }
+
+  /** The cursor is on the laptop: by a switch in progress, or over the screen edge. */
+  #cursorLeft(): void {
+    this.#onLaptop.done();
+    if (this.#state.target !== "laptop") this.#report({ target: "laptop" });
   }
 
   #line(line: string): void {
@@ -263,7 +299,7 @@ export class DeskflowServerInput implements InputEngine {
     }
     const sw = RE_SWITCH.exec(line);
     if (sw) {
-      if (sw[2] === CLIENT_SCREEN) this.#onLaptop.done();
+      if (sw[2] === CLIENT_SCREEN) this.#cursorLeft();
       else if (sw[2] === SERVER_SCREEN && this.#state.target === "laptop") this.#report({ target: "gaming-pc" });
     }
   }
@@ -297,6 +333,7 @@ export class DeskflowClient {
   #warn: (message: string) => void;
   #warned = false;
   #stopping = false;
+  #stopped: Promise<void> | null = null;
 
   constructor(paths: DeskflowPaths, onStatus: (s: ClientStatus, error?: AgentError) => void, warn: (message: string) => void = () => {}) {
     this.#p = paths;
@@ -314,6 +351,8 @@ export class DeskflowClient {
   }
 
   async start(): Promise<void> {
+    // A stop still under way finishes first; otherwise this would find the old client running and keep it.
+    await this.#stopped;
     if (this.#proc?.running) return;
     const service = this.#p.servicePipe !== undefined && (await daemonRunning(this.#p.servicePipe));
     if (!service && this.#p.servicePipe !== undefined && !this.#warned) {
@@ -353,7 +392,13 @@ export class DeskflowClient {
     if (!this.#proc?.running) return;
     this.#stopping = true;
     this.#set({ engine: "stopping" });
-    await this.#proc.stop();
+    const stopped = this.#proc.stop();
+    this.#stopped = stopped.catch(() => {});
+    try {
+      await stopped;
+    } finally {
+      this.#stopped = null;
+    }
   }
 
   cursor(event: CursorEvent): void {

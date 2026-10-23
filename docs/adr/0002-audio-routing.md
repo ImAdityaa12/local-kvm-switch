@@ -58,7 +58,28 @@ system-wide capture endpoint; new kernel drivers need Microsoft signing.
 - Verified on one machine (VB-CABLE installed, silent virtual source): the route streams at 48 kHz
   stereo float with no conversion and no dropouts; mute at the sender produces exact zeros.
 
+## Default devices (2026-10-22)
+
+- When either route starts on the laptop (Laptop mode), the laptop makes **Voicemeeter Input** (else
+  another second cable) its default output and **CABLE Output** its default input, for every role.
+  Without a second cable the output only changes when it is the mic's cable. The laptop's own
+  (non-VB-Audio) defaults are remembered in `own-audio-devices.json` in the data folder.
+- **Reset mic and speaker** (laptop tray menu, laptop dashboard, command `audio.resetDevices`) sets
+  those again in Laptop mode, or while a route runs, and the laptop's own devices otherwise. When
+  the output changes while sending, the sender restarts on the new output.
+- `kvm-audio set-default ID…` uses the undocumented `IPolicyConfig::SetDefaultEndpoint`, the same
+  interface Sound settings use; Windows has no public API for it.
+
 ## Consequences
 
 - One reboot on the laptop for VB-CABLE. Organisations need VB-Audio licences.
 - No driver of our own unless the spike shows no acceptable alternative and the user approves it.
+
+## Revised 2026-10-23: controlled from the laptop too
+
+The gaming PC still owns both routes. It sends its audio state (routes and device lists) to the
+laptop as `audio.state`, at most every 250 ms because level meters change constantly. The laptop's
+dashboard shows the same two routes, and sends its audio commands (on/off, device, volume, mute)
+back as `audio.command`. The gaming PC checks each one exactly as it checks its own dashboard's
+commands, then runs it (`agent/src/audio/mirror.ts`). The laptop shows a change only once the
+gaming PC confirms it, and drops the mirrored state as soon as the link goes down.

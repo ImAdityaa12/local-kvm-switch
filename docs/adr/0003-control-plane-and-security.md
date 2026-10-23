@@ -26,10 +26,21 @@ Date: 2026-10-17
 - **Link**: TLS 1.2 with the pre-shared key from pairing (HKDF-SHA256 over the X25519 secret and both
   nonces), cipher ECDHE-PSK-CHACHA20-POLY1305 (forward secrecy). Only Node's built-in TLS is used; no
   hand-made record protocol. TCP 47821 on the address given with `--bind` (or the first private IPv4).
+  Revised 2026-10-23: on every adapter (0.0.0.0) unless `--bind` pins an address this PC still has,
+  so a new DHCP lease needs no restart. Connections from outside loopback, RFC 1918 and link-local
+  IPv4 are closed before TLS, here and on the pairing port.
+- **Finding the gaming PC again** (2026-10-23): when its saved address stops answering, the laptop
+  broadcasts on UDP 47823 a nonce with HMAC-SHA256(PSK) over it; only the paired gaming PC answers,
+  with its own HMAC, straight back. Failing that, it resolves the gaming PC's computer name. The
+  laptop saves the new address only after the PSK handshake succeeds there, so a forged answer can
+  at most cost one failed connection.
 - Messages are newline-delimited JSON, capped at 64 KiB per frame, validated, and rate-limited
   (50/s, burst 100). Heartbeat every 2 s; the link is down after 6.5 s of silence.
 - **Tunnels**: separate PSK-authenticated TLS connections whose first frame names a loopback target on
   the gaming PC (only `deskflow` is allowed). Used for Deskflow (ADR 0001).
+  Revised 2026-10-23 (ADR 0005): either machine opens streams to the other's registered targets
+  (`files`, `clipboard`, and Deskflow and audio on the gaming PC). The gaming PC asks over the
+  control session and the laptop dials back, so the laptop still never listens.
 - Key storage: `%LOCALAPPDATA%\LanKvmSwitcher\peer.json`. TODO: DPAPI.
 - Windows prompts for the firewall the first time Node listens; the guide says to allow private
   networks only. The agent adds no rule itself.

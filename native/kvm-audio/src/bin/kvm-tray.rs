@@ -1,8 +1,8 @@
 // LAN KVM tray icon. The agent starts this and owns it:
 //   agent -> tray (stdin, one JSON object per line):
-//     {"icon":"local"|"remote"|"busy"|"problem","status":"...","canSwitch":bool,"canReturn":bool,"switchLabel":"..."}
+//     {"icon":"local"|"remote"|"busy"|"problem","status":"...","canSwitch":bool,"canReturn":bool,"switchLabel":"...","resetAudio":bool,"edgeSwitch":bool|null}
 //   tray -> agent (stdout, one JSON object per line):
-//     {"action":"switch"} | {"action":"return"} | {"action":"dashboard"}
+//     {"action":"switch"} | {"action":"return"} | {"action":"dashboard"} | {"action":"resetAudio"} | {"action":"edge"}
 //     {"event":"icon","ok":bool}   whether Windows accepted the icon
 // When stdin closes (the agent stopped) the icon is removed and the tray exits.
 
@@ -20,7 +20,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
-    DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, HICON, ICONINFO, MF_GRAYED,
+    DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, HICON, ICONINFO, MF_CHECKED, MF_GRAYED,
     MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
     SM_CXSMICON, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
     TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP,
@@ -33,6 +33,8 @@ const WM_STATE: u32 = WM_APP + 2;
 const ID_SWITCH: usize = 2;
 const ID_RETURN: usize = 3;
 const ID_DASHBOARD: usize = 4;
+const ID_RESET_AUDIO: usize = 5;
+const ID_EDGE: usize = 6;
 
 #[derive(Clone)]
 struct State {
@@ -41,6 +43,10 @@ struct State {
     switch_label: String,
     can_switch: bool,
     can_return: bool,
+    /// Offer "Reset mic and speaker" (the laptop).
+    reset_audio: bool,
+    /// "Switch at screen edges", ticked when on; None hides it.
+    edge_switch: Option<bool>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -156,6 +162,14 @@ fn show_menu(hwnd: HWND) {
         }
         let flags = if state.can_return { MF_STRING } else { MF_STRING | MF_GRAYED };
         let _ = AppendMenuW(menu, flags, ID_RETURN, w!("Return to Gaming PC"));
+        if let Some(on) = state.edge_switch {
+            let flags = if on { MF_STRING | MF_CHECKED } else { MF_STRING };
+            let _ = AppendMenuW(menu, flags, ID_EDGE, w!("Switch at screen edges"));
+        }
+        if state.reset_audio {
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+            let _ = AppendMenuW(menu, MF_STRING, ID_RESET_AUDIO, w!("Reset mic and speaker"));
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, ID_DASHBOARD, w!("Open dashboard"));
         let mut pt = POINT::default();
@@ -169,6 +183,8 @@ fn show_menu(hwnd: HWND) {
             ID_SWITCH => send("switch"),
             ID_RETURN => send("return"),
             ID_DASHBOARD => send("dashboard"),
+            ID_RESET_AUDIO => send("resetAudio"),
+            ID_EDGE => send("edge"),
             _ => {}
         }
     }
@@ -221,6 +237,8 @@ fn parse(line: &str) -> Option<State> {
         switch_label: text("switchLabel"),
         can_switch: v.get("canSwitch").and_then(|x| x.as_bool()).unwrap_or(false),
         can_return: v.get("canReturn").and_then(|x| x.as_bool()).unwrap_or(false),
+        reset_audio: v.get("resetAudio").and_then(|x| x.as_bool()).unwrap_or(false),
+        edge_switch: v.get("edgeSwitch").and_then(|x| x.as_bool()),
     })
 }
 

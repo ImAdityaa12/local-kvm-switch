@@ -2,13 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { useAgent, type ConnectionStatus } from "@/lib/use-agent";
+import { cn } from "@/lib/utils";
 import type { AgentState, Command } from "@/lib/protocol";
-import { TargetSwitch } from "./target-switch";
+import { EdgeSwitch, TargetSwitch } from "./target-switch";
 import { AudioSection } from "./audio-route";
 import { Activity, PeerPanel } from "./peer-panel";
 import { ErrorNote, Fact, Status } from "./bits";
 import { ENGINE_TEXT } from "./format";
 import { DisplayFacts, ModeSteps } from "./mode-steps";
+import { SharingPanel } from "./sharing-panel";
 
 function useNow(intervalMs = 1000) {
   const [now, setNow] = useState(0);
@@ -42,7 +44,8 @@ export function Dashboard() {
 
 function TopBar({ status, state, send }: { status: ConnectionStatus; state: AgentState | null; send: (c: Command) => Promise<unknown> }) {
   const remote =
-    state && (state.input.target === "laptop" || state.input.hooksActive || state.input.pending?.target === "laptop" || state.mode?.pending?.target === "laptop" || state.mode?.current === "laptop");
+    // Deskflow waiting at the screen edges is not the laptop having input.
+    state && (state.input.target === "laptop" || (state.input.hooksActive && !state.input.edgeSwitch) || state.input.pending?.target === "laptop" || state.mode?.pending?.target === "laptop" || state.mode?.current === "laptop");
   const onLaptop = state?.agent.machine === "laptop";
   return (
     <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-5">
@@ -105,7 +108,21 @@ function Connected({
       ) : null}
 
       {state.agent.machine === "laptop" ? <LaptopInput state={state} send={send} /> : <TargetSwitch state={state} send={send} />}
-      {state.agent.machine === "laptop" ? <LaptopAudio /> : state.agent.engines.audio === "none" ? <AudioLater /> : <AudioSection state={state} send={send} now={now} />}
+      {state.agent.machine === "laptop" ? (
+        // The gaming PC's routes, controlled from here, while it is reachable.
+        state.audioFrom ? (
+          <AudioSection state={state} send={send} now={now}>
+            <ResetAudio state={state} send={send} className="mt-2 bg-surface-1 px-5 py-5 sm:px-6" />
+          </AudioSection>
+        ) : (
+          <LaptopAudio state={state} send={send} />
+        )
+      ) : state.agent.engines.audio === "none" ? (
+        <AudioLater />
+      ) : (
+        <AudioSection state={state} send={send} now={now} />
+      )}
+      <SharingPanel state={state} send={send} now={now} />
 
       <div className="mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         <PeerPanel state={state} send={send} now={now} />
@@ -126,6 +143,8 @@ function Connected({
 function LaptopInput({ state, send }: { state: AgentState; send: (c: Command) => Promise<unknown> }) {
   const { input, peer } = state;
   const here = input.target === "laptop";
+  // Here over the screen edge: the monitor and audio are still the gaming PC's, so Laptop mode is on offer.
+  const overEdge = here && !!state.mode && state.mode.current !== "laptop" && !state.mode.pending;
   const [asked, setAsked] = useState(false);
   const taking = asked || input.pending?.target === "laptop" || state.mode?.pending?.target === "laptop";
   const pcName = peer.name ?? "the gaming PC";
@@ -152,13 +171,18 @@ function LaptopInput({ state, send }: { state: AgentState; send: (c: Command) =>
                 : `Asking ${pcName} to switch to this laptop.`
               : `Laptop mode switches the monitor to this laptop, sets Extend, and moves the keyboard, mouse and audio here.`}
           {here && input.hotkeys ? ` ${input.hotkeys.toGamingPc} sends it back.` : ""}
+          {overEdge ? " It came over the screen edge, so the monitor and audio stay with the gaming PC." : ""}
         </p>
-        {!here ? (
+        {!here || overEdge ? (
           <button
             type="button"
             onClick={take}
             disabled={taking || peer.link !== "online"}
-            className="press mt-8 h-12 bg-live px-6 text-lg font-semibold text-live-ink hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className={cn(
+              "press mt-8 h-12 px-6 text-lg font-semibold hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50",
+              // On the green panel (here over the edge) the button needs its own colour.
+              here ? "bg-ground text-ink" : "bg-live text-live-ink",
+            )}
           >
             {taking ? (
               <Status tone="idle" busy className="[&>span:first-child]:bg-current">
@@ -188,20 +212,60 @@ function LaptopInput({ state, send }: { state: AgentState; send: (c: Command) =>
           </Status>
         </Fact>
       </dl>
+      <EdgeSwitch state={state} send={send} />
     </section>
   );
 }
 
-function LaptopAudio() {
+/** Before the gaming PC's routes are known here (it is unreachable, or older): what happens, and Reset. */
+function LaptopAudio({ state, send }: { state: AgentState; send: (c: Command) => Promise<unknown> }) {
   return (
     <section aria-labelledby="audio-heading" className="rise mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" style={{ "--i": 2 } as React.CSSProperties}>
       <h2 id="audio-heading" className="text-title leading-tight font-semibold tracking-[-0.03em]">
         Sound goes both ways
       </h2>
-      <p className="max-w-[60ch] text-lg text-ink-2">
-        When the gaming PC turns on its laptop audio route, this laptop sends everything it plays, unchanged. When it turns on the microphone route, your IEM mic plays into CABLE Input and apps here record it from CABLE Output. Both are controlled from the gaming PC&apos;s dashboard.
-      </p>
+      <div>
+        <p className="max-w-[60ch] text-lg text-ink-2">
+          When the gaming PC turns on its laptop audio route, this laptop sends everything it plays, unchanged. When it turns on the microphone route, your IEM mic plays into CABLE Input and apps here record it from CABLE Output. The gaming PC runs both; they can be controlled here too while it is reachable.
+        </p>
+        <ResetAudio state={state} send={send} className="mt-4" />
+      </div>
     </section>
+  );
+}
+
+/** Laptop: Windows' default speaker and mic. */
+function ResetAudio({ state, send, className }: { state: AgentState; send: (c: Command) => Promise<unknown>; className?: string }) {
+  const [resetting, setResetting] = useState(false);
+  const laptopMode = state.mode?.current === "laptop" || state.mode?.pending?.target === "laptop";
+  const reset = async () => {
+    setResetting(true);
+    try {
+      await send({ type: "audio.resetDevices" });
+    } finally {
+      setResetting(false);
+    }
+  };
+  return (
+    <div className={cn("flex flex-wrap items-center justify-between gap-x-6 gap-y-4", className)}>
+      <p className="max-w-[60ch] text-lg text-ink-2">
+        Laptop mode sets this laptop&apos;s speaker to Voicemeeter Input and its microphone to CABLE Output. Reset puts them back to {laptopMode ? "those, if something changed them" : "the laptop's own speakers and microphone"}.
+      </p>
+      <button
+        type="button"
+        onClick={reset}
+        disabled={resetting}
+        className="press h-11 shrink-0 bg-surface-2 px-5 font-medium hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {resetting ? (
+          <Status tone="idle" busy className="[&>span:first-child]:bg-current">
+            Resetting
+          </Status>
+        ) : (
+          "Reset mic and speaker"
+        )}
+      </button>
+    </div>
   );
 }
 

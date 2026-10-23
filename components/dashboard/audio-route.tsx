@@ -19,8 +19,14 @@ const STATUS_TONE: Record<RouteState["status"], Tone> = {
   error: "danger",
 };
 
-export function AudioSection({ state, send, now }: { state: AgentState; send: Send; now: number }) {
-  const peerName = state.peer.name ?? "the laptop";
+/**
+ * Both audio routes. The gaming PC owns them; on the laptop (state.audioFrom) they mirror the gaming
+ * PC's, and every change here is sent to it and shows once it confirms.
+ */
+export function AudioSection({ state, send, now, children }: { state: AgentState; send: Send; now: number; children?: React.ReactNode }) {
+  const onLaptop = state.agent.machine === "laptop";
+  const peerName = state.peer.name ?? (onLaptop ? "the gaming PC" : "the laptop");
+  const mic = state.audio.micToLaptop.virtualEndpoint.name ?? "a virtual microphone";
   return (
     <section aria-labelledby="audio-heading" className="mt-28 md:mt-40">
       <div className="rise max-w-[60ch]" style={{ "--i": 0 } as React.CSSProperties}>
@@ -29,6 +35,7 @@ export function AudioSection({ state, send, now }: { state: AgentState; send: Se
         </h2>
         <p className="mt-3 text-lg text-ink-2">
           Each direction runs on its own and never touches the keyboard and mouse path. A route shows Streaming only once the agent hears audio arriving.
+          {onLaptop ? ` ${peerName} runs both routes; changes here go to it.` : ""}
         </p>
       </div>
       <div className="mt-10 grid grid-cols-[minmax(0,1fr)] gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -36,30 +43,32 @@ export function AudioSection({ state, send, now }: { state: AgentState; send: Se
           id="laptopToPc"
           index={1}
           title="Laptop audio to Gaming PC"
-          summary={`Plays everything ${peerName} plays through a device on this PC.`}
+          summary={onLaptop ? `Plays everything this laptop plays through a device on ${peerName}.` : `Plays everything ${peerName} plays through a device on this PC.`}
           route={state.audio.laptopToPc}
           devices={state.devices.playback}
-          deviceLabel="Play on"
+          deviceLabel={onLaptop ? "Play on (gaming PC)" : "Play on"}
           levelLabel="Playback volume"
           simulated={state.agent.simulated}
           send={send}
           now={now}
+          path={onLaptop ? "This laptop's loopback capture, network, the gaming PC" : "Laptop loopback capture, network, this PC"}
         />
         <Route
           id="micToLaptop"
           index={2}
           title="Gaming PC microphone to Laptop"
-          summary={`Your IEM microphone appears on ${peerName} as ${state.audio.micToLaptop.virtualEndpoint.name ?? "a virtual microphone"}. Pick it in Discord.`}
+          summary={onLaptop ? `Your IEM microphone appears on this laptop as ${mic}. Pick it in Discord.` : `Your IEM microphone appears on ${peerName} as ${mic}. Pick it in Discord.`}
           route={state.audio.micToLaptop}
           devices={state.devices.capture}
-          deviceLabel="Microphone on this PC"
-          levelLabel="Level on the laptop"
+          deviceLabel={onLaptop ? "Microphone (gaming PC)" : "Microphone on this PC"}
+          levelLabel={onLaptop ? "Level on this laptop" : "Level on the laptop"}
           simulated={state.agent.simulated}
           send={send}
           now={now}
           endpoint={state.audio.micToLaptop.virtualEndpoint}
         />
       </div>
+      {children}
     </section>
   );
 }
@@ -77,6 +86,7 @@ function Route({
   send,
   now,
   endpoint,
+  path,
 }: {
   id: RouteId;
   index: number;
@@ -90,6 +100,7 @@ function Route({
   send: Send;
   now: number;
   endpoint?: VirtualEndpointState;
+  path?: string;
 }) {
   // While dragging, show the local value; otherwise show what the agent reports.
   const [draft, setDraft] = useState<number | null>(null);
@@ -218,7 +229,7 @@ function Route({
             )}
           </Fact>
         ) : (
-          <Fact term="Path">Laptop loopback capture, network, this PC</Fact>
+          <Fact term="Path">{path}</Fact>
         )}
       </dl>
     </article>

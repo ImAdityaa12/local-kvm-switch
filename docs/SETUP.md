@@ -55,8 +55,12 @@ Follow the parts in order. Parts 1–3 are done once; Part 4 is what you do each
       **extract** the zip.
    2. Right-click `VoicemeeterSetup.exe` → **Run as administrator** → **Install**.
    3. **Reboot.**
-   4. Settings → System → Sound → **Output** → **Voicemeeter Input (VB-Audio Voicemeeter VAIO)**.
-      The laptop's speakers go quiet; the agent sends what plays there to your IEM.
+   4. Nothing to choose in Sound settings: **Laptop mode sets the laptop's Output to Voicemeeter
+      Input (VB-Audio Voicemeeter VAIO) and its Input to CABLE Output (VB-Audio Virtual Cable)**,
+      and remembers your own speakers and microphone. The laptop's speakers go quiet; the agent
+      sends what plays there to your IEM. **Reset mic and speaker** (right-click the laptop's LAN
+      KVM tray icon, or the button on its dashboard) sets them again if something changed them in
+      Laptop mode, and puts back the laptop's own speakers and microphone otherwise.
    5. **Do not start the Voicemeeter app** (and if it shows in the tray, right-click → Exit): while
       it runs, it can play the sound on the speakers again. VB-CABLE A+B's **CABLE-A Input** works
       the same way if you have it.
@@ -102,8 +106,10 @@ so no Rust is needed on the gaming PC.
 
 ## Part 3: Pair the two machines (once)
 
-1. **Gaming PC: find its address.** Run `ipconfig` and note the **IPv4 Address** of the adapter you
-   use (Ethernet or Wi-Fi), for example `192.168.1.20`. Both machines must be on the same network.
+1. **Gaming PC: find its address.** The gaming PC dashboard shows it under **Pair your laptop** once
+   pairing is open (or run `ipconfig` and note the **IPv4 Address**, for example `192.168.1.20`).
+   Both machines must be on the same network. You type it only this once: if the gaming PC's
+   address changes later, the laptop finds it again on its own.
 2. **Gaming PC: start the agent and the dashboard** (Part 4, steps 1–2).
 3. **Laptop: start the agent and the dashboard** (Part 4, steps 3–4).
 4. **Gaming PC dashboard:** scroll to **Pair your laptop** → **Open pairing for two minutes**.
@@ -121,14 +127,16 @@ so no Rust is needed on the gaming PC.
 No terminals, no Next.js server, no browser tab left open. Close any agent or `npm run dev` you
 started in a terminal first, then:
 
-- **Gaming PC** (with its address):
+- **Gaming PC** (no address needed; it listens on every network adapter, so a new address from the
+  router needs nothing from you):
   ```
   cd local-kvm-switch
   npm.cmd install
   npm.cmd run build
   npm.cmd run build:audio
-  npm.cmd run autostart -- install --machine gaming-pc --bind 192.168.1.20
+  npm.cmd run autostart -- install --machine gaming-pc
   ```
+  If you installed it before with `--bind`, run this install once more without it.
 - **Laptop:**
   ```
   cd C:\Users\Lenovo\Desktop\local-kvm-switcher
@@ -167,7 +175,7 @@ changed) again, then run
 
 ### Or: in terminals, by hand
 
-1. **Agent:** `node agent/src/main.ts --machine gaming-pc --bind 192.168.1.20` on the gaming PC, or
+1. **Agent:** `node agent/src/main.ts --machine gaming-pc` on the gaming PC, or
    `node agent/src/main.ts --machine laptop` on the laptop. The first time, Windows Firewall asks
    about Node.js: tick **Private networks** only → **Allow**.
 2. Open the link it prints. If you ran `npm.cmd run build`, the agent serves the dashboard itself.
@@ -180,7 +188,9 @@ To stop, press **Ctrl+C**.
 
 ## Part 5: Use it
 
-Audio devices are chosen on the **gaming PC dashboard**. Switching modes works from either machine.
+Audio routes, devices, volume and mute can be set from either dashboard: the gaming PC runs them, and
+the laptop's dashboard shows and changes the same routes while the gaming PC is reachable. Switching
+modes works from either machine.
 
 ### Laptop mode and Gaming PC mode
 
@@ -221,11 +231,27 @@ switch.
 3. Press **Ctrl+Alt+Right**, or click **Gaming PC mode** (top right, on either dashboard), or
    **Return to Gaming PC** in the tray menu. Each one runs the whole of Gaming PC mode, monitor
    included. If the laptop disconnects, the gaming PC does the same on its own. Moving to the edge of
-   the laptop's screen never switches back on its own. The dashboard shows
+   the laptop's screen switches back only with **Switch at the screen edges** on (below). The dashboard shows
    **Input engine: Not running** and **Global input hooks: None installed**, and the log says
    *Local input confirmed. Input sharing stopped, no hooks installed.* That message is normal here.
 
 Switch back to the Gaming PC before starting a game with anti-cheat.
+
+### Switching at the screen edges (optional)
+
+Turn on **Switch at the screen edges** on either dashboard, or tick it in either tray menu. The
+gaming PC keeps the setting, so it stays on after a restart.
+
+- **Off the left edge of the gaming PC's screen:** the keyboard and mouse move to the laptop. Only
+  the input moves: the monitor stays on the gaming PC and you use the laptop on its own screen.
+- **Off the right edge of the laptop's screen:** they come back.
+- **In Laptop mode** the laptop's right edge does the whole of Gaming PC mode, monitor included, as
+  Ctrl+Alt+Right does.
+
+While it is on, Deskflow keeps running on the gaming PC **in Gaming PC mode too**, waiting at the
+edge with the laptop connected. The dashboard then shows **Global input hooks: Installed by the
+engine**. Turn it off before starting a game with anti-cheat. Also, in games with a visible cursor,
+a quick move to the left edge sends the keyboard and mouse to the laptop.
 
 ### Laptop sound in your IEM
 
@@ -241,7 +267,30 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 2. Turn the switch on.
 3. On the laptop, in Discord: **Settings → Voice & Video → Input Device → CABLE Output (VB-Audio
    Virtual Cable)** → **Let's Check**.
-4. **Mute** on the gaming PC dashboard silences the mic before it leaves the PC.
+4. **Mute** (on either dashboard) silences the mic before it leaves the gaming PC.
+
+### Clipboard and files
+
+Both are on by default, in both directions, and everything goes over the paired link only.
+
+1. **Once on each machine**, in the project folder: `npm.cmd run setup:files`. It installs rclone
+   and WinFsp with winget; Windows asks for permission once (WinFsp is a file-system driver). Also
+   run `npm.cmd run build:audio` once after updating; it builds the clipboard helper
+   (`kvm-clip.exe`). The agent notices both within 15 s; restart it after the build.
+2. **Files:** the other machine's drives appear in Explorer under **This PC** as one network drive:
+   **Gaming PC (G:)** on the laptop and **Laptop (L:)** on the gaming PC (another letter if that one
+   is taken). Each drive is a folder named by its letter: `G:\C\Users\…`, `G:\D\Games\…`. Every app
+   can open and save there. Files open as the signed-in Windows user of the other machine.
+3. **Clipboard:** copy on one machine, paste on the other: text, formatted text and images. Copied
+   files paste too (Explorer copies them from the other machine's drive), so the drive must be
+   connected.
+4. **Turn either off** in the dashboard's **Clipboard and files** section. *Share this PC's drives*
+   decides whether the other machine sees this PC's drives; *Share the clipboard* covers both
+   directions on this PC.
+
+Copies a password manager marks as private (KeePass does, for example) never leave the machine. A file saved through the drive reaches the other machine about a second after the app
+closes it, and new files there show within a few seconds. If the link drops for more than 20 s the
+drive is removed, so Explorer does not hang on it; it comes back with the link.
 
 ---
 
@@ -258,9 +307,11 @@ Switch back to the Gaming PC before starting a game with anti-cheat.
 | "The display helper is not built" | Run `npm.cmd run build:audio` on that machine (it builds `kvm-display.exe` with the audio helper), then restart the agent. |
 | "The Deskflow app is already running Deskflow" | The agent closes the app by itself, so this means it could not. Right-click the Deskflow tray icon → **Quit**, and Task Manager → **Startup apps** → **Deskflow** → **Disable**. |
 | Clicking **Laptop** never reaches *Press Ctrl+Alt+Left* (or Ctrl+Alt+Left does nothing), and the laptop's log says *Local input confirmed…* right after the switch starts | The laptop is running an older version that stopped its own Deskflow straight away. Update the laptop (`git pull`, Part 2) and restart the laptop agent. |
-| Laptop shows **Unreachable** | Same network? Correct `--bind` address on the gaming PC? Allowed Node.js through the firewall for **Private** networks? Network set to **Private**, not Public, in Windows settings? |
+| Laptop shows **Unreachable** | Same network? Allowed Node.js through the firewall for **Private** networks (both TCP and UDP; the laptop finds a gaming PC whose address changed over UDP 47823)? Network set to **Private**, not Public, in Windows settings? If the gaming PC's address changed, the laptop's log says *Found … at its new address* within about 15 s; if it never does, pair again with the new address. |
+| The other machine's drive does not appear | Its dashboard must show **Share this PC's drives** on, with *Offering C:, …*. Both machines need `npm.cmd run setup:files`; the one showing the drive needs WinFsp. rclone's own messages are in `%LOCALAPPDATA%\LanKvmSwitcher\files-mount.log` (and `files-serve.log` on the other machine). |
+| Pasted files do nothing, or paste is greyed out | Files copied on the other machine paste only while its drive is connected here, and only from drives it offers. Text and images do not need the drive. |
 | Pairing: "Could not reach …" | Open pairing on the gaming PC first; it stays open for two minutes. Check the address. |
-| "The laptop's sound output is "CABLE …", the microphone's cable", or the microphone fails with *0x8889000A* | On the laptop: Settings → System → Sound → Output → **Voicemeeter Input** (Part 1, step 6), or your speakers or headphones. Sound sent to "CABLE In 16ch" keeps the microphone from opening "CABLE Input". |
+| "The laptop's sound output is "CABLE …", the microphone's cable", or the microphone fails with *0x8889000A* | On the laptop: right-click the LAN KVM tray icon → **Reset mic and speaker** while in Laptop mode, or Settings → System → Sound → Output → **Voicemeeter Input** (Part 1, step 6), or your speakers or headphones. Sound sent to "CABLE In 16ch" keeps the microphone from opening "CABLE Input". |
 | "The laptop has no virtual microphone" | Install VB-CABLE on the laptop (Part 1, step 5), reboot, restart the laptop agent. |
 | "The audio helper is not built" | Put `kvm-audio.exe` in `native\kvm-audio\target\release\` (Part 2), restart the agent. |
 | Dashboard says **No agent** | The agent window was closed. Start it again and open the new link. |

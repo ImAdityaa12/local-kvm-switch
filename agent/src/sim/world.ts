@@ -93,6 +93,25 @@ export class SimInput implements InputEngine {
     this.#cb({ target: "laptop", engine: "running", hooksActive: true, clientConnected: true });
   }
 
+  /** Edge switching: running with the laptop connected and the cursor still here. */
+  async standby(): Promise<void> {
+    if (this.#running) return;
+    const gen = ++this.#gen;
+    this.#cb({ target: "gaming-pc", engine: "starting", hooksActive: false, clientConnected: false });
+    await this.#world.delay();
+    if (gen !== this.#gen) throw new EngineError({ code: "engine-crashed", message: "Switch cancelled" });
+    if (!this.#world.peerReachable) throw new EngineError({ ...UNREACHABLE, message: "Laptop client did not connect" });
+    this.#running = true;
+    this.#cb({ target: "gaming-pc", engine: "running", hooksActive: true, clientConnected: true });
+  }
+
+  setEdges(): void {}
+
+  /** Stands in for the cursor crossing a screen edge while the engine runs. */
+  cross(to: "laptop" | "gaming-pc"): void {
+    if (this.#running) this.#cb({ target: to, engine: "running", hooksActive: true, clientConnected: true });
+  }
+
   async deactivate(): Promise<void> {
     this.#gen++;
     if (!this.#running) {
