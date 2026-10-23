@@ -267,6 +267,29 @@ a quick move to the left edge sends the keyboard and mouse to the laptop.
    Virtual Cable)** → **Let's Check**.
 4. **Mute** on the gaming PC dashboard silences the mic before it leaves the PC.
 
+### Clipboard and files
+
+Both are on by default, in both directions, and everything goes over the paired link only.
+
+1. **Once on each machine**, in the project folder: `npm.cmd run setup:files`. It installs rclone
+   and WinFsp with winget; Windows asks for permission once (WinFsp is a file-system driver). Also
+   run `npm.cmd run build:audio` once after updating; it builds the clipboard helper
+   (`kvm-clip.exe`). The agent notices both within 15 s; restart it after the build.
+2. **Files:** the other machine's drives appear in Explorer under **This PC** as one network drive:
+   **Gaming PC (G:)** on the laptop and **Laptop (L:)** on the gaming PC (another letter if that one
+   is taken). Each drive is a folder named by its letter: `G:\C\Users\…`, `G:\D\Games\…`. Every app
+   can open and save there. Files open as the signed-in Windows user of the other machine.
+3. **Clipboard:** copy on one machine, paste on the other: text, formatted text and images. Copied
+   files paste too (Explorer copies them from the other machine's drive), so the drive must be
+   connected.
+4. **Turn either off** in the dashboard's **Clipboard and files** section. *Share this PC's drives*
+   decides whether the other machine sees this PC's drives; *Share the clipboard* covers both
+   directions on this PC.
+
+Copies a password manager marks as private (KeePass does, for example) never leave the machine. A file saved through the drive reaches the other machine about a second after the app
+closes it, and new files there show within a few seconds. If the link drops for more than 20 s the
+drive is removed, so Explorer does not hang on it; it comes back with the link.
+
 ---
 
 ## Troubleshooting
@@ -283,6 +306,8 @@ a quick move to the left edge sends the keyboard and mouse to the laptop.
 | "The Deskflow app is already running Deskflow" | The agent closes the app by itself, so this means it could not. Right-click the Deskflow tray icon → **Quit**, and Task Manager → **Startup apps** → **Deskflow** → **Disable**. |
 | Clicking **Laptop** never reaches *Press Ctrl+Alt+Left* (or Ctrl+Alt+Left does nothing), and the laptop's log says *Local input confirmed…* right after the switch starts | The laptop is running an older version that stopped its own Deskflow straight away. Update the laptop (`git pull`, Part 2) and restart the laptop agent. |
 | Laptop shows **Unreachable** | Same network? Allowed Node.js through the firewall for **Private** networks (both TCP and UDP; the laptop finds a gaming PC whose address changed over UDP 47823)? Network set to **Private**, not Public, in Windows settings? If the gaming PC's address changed, the laptop's log says *Found … at its new address* within about 15 s; if it never does, pair again with the new address. |
+| The other machine's drive does not appear | Its dashboard must show **Share this PC's drives** on, with *Offering C:, …*. Both machines need `npm.cmd run setup:files`; the one showing the drive needs WinFsp. rclone's own messages are in `%LOCALAPPDATA%\LanKvmSwitcher\files-mount.log` (and `files-serve.log` on the other machine). |
+| Pasted files do nothing, or paste is greyed out | Files copied on the other machine paste only while its drive is connected here, and only from drives it offers. Text and images do not need the drive. |
 | Pairing: "Could not reach …" | Open pairing on the gaming PC first; it stays open for two minutes. Check the address. |
 | "The laptop's sound output is "CABLE …", the microphone's cable", or the microphone fails with *0x8889000A* | On the laptop: right-click the LAN KVM tray icon → **Reset mic and speaker** while in Laptop mode, or Settings → System → Sound → Output → **Voicemeeter Input** (Part 1, step 6), or your speakers or headphones. Sound sent to "CABLE In 16ch" keeps the microphone from opening "CABLE Input". |
 | "The laptop has no virtual microphone" | Install VB-CABLE on the laptop (Part 1, step 5), reboot, restart the laptop agent. |

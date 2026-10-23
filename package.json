@@ -13,6 +13,7 @@
     "build:audio": "node scripts/build-audio.mjs",
     "test:audio": "node scripts/build-audio.mjs --test",
     "autostart": "node scripts/autostart.mjs",
+    "setup:files": "node scripts/setup-files.mjs",
     "logs": "node scripts/logs.mjs"
   },
   "dependencies": {

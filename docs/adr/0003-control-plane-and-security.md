@@ -38,6 +38,9 @@ Date: 2026-10-17
   (50/s, burst 100). Heartbeat every 2 s; the link is down after 6.5 s of silence.
 - **Tunnels**: separate PSK-authenticated TLS connections whose first frame names a loopback target on
   the gaming PC (only `deskflow` is allowed). Used for Deskflow (ADR 0001).
+  Revised 2026-10-23 (ADR 0005): either machine opens streams to the other's registered targets
+  (`files`, `clipboard`, and Deskflow and audio on the gaming PC). The gaming PC asks over the
+  control session and the laptop dials back, so the laptop still never listens.
 - Key storage: `%LOCALAPPDATA%\LanKvmSwitcher\peer.json`. TODO: DPAPI.
 - Windows prompts for the firewall the first time Node listens; the guide says to allow private
   networks only. The agent adds no rule itself.

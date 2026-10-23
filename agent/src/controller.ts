@@ -34,6 +34,13 @@ export interface ModeControl {
   peerLost?(): void;
 }
 
+export interface SharingControl {
+  setClipboard(on: boolean): Promise<void>;
+  setFiles(on: boolean): Promise<void>;
+  /** Opens the other machine's drive in Explorer. */
+  openDrive(): Promise<void>;
+}
+
 export interface ControllerDeps {
   store: Store;
   /** Set later than the controller is built, so it can run the controller's own commands. */
@@ -48,6 +55,8 @@ export interface ControllerDeps {
   saveEdgeSwitch?: (on: boolean) => void;
   /** Laptop: the gaming PC keeps the edge-switch setting, so this asks it. */
   askEdgeSwitch?: (on: boolean) => Promise<void>;
+  /** Clipboard and file sharing (sharing/); absent where they are not built. */
+  sharing?: SharingControl;
   sim?: Simulation;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
@@ -203,6 +212,14 @@ export class Controller {
         const reset = this.#d.resetDevices;
         if (!reset) throw new EngineError({ code: "not-supported", message: "Only the laptop agent, with its audio helper built, resets its mic and speaker." });
         return reset();
+      }
+      case "sharing.setClipboard":
+      case "sharing.setFiles":
+      case "files.open": {
+        const sharing = this.#d.sharing;
+        if (!sharing) throw new EngineError({ code: "not-supported", message: "This agent does not share the clipboard or files." });
+        if (cmd.type === "files.open") return sharing.openDrive();
+        return cmd.type === "sharing.setClipboard" ? sharing.setClipboard(cmd.enabled) : sharing.setFiles(cmd.enabled);
       }
       case "pairing.begin":
         if (store.state.peer.link !== "unpaired") {

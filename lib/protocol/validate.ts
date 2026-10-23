@@ -46,6 +46,8 @@ export function parseCommand(raw: unknown): Parsed<Command> {
       if (typeof c.address !== "string" || !isLanAddress(c.address)) return fail("address must be an IPv4 address or host name");
       return { ok: true, value: { type: c.type, address: c.address } };
     case "input.setEdgeSwitch":
+    case "sharing.setClipboard":
+    case "sharing.setFiles":
       if (!onlyKeys(c, ["type", "enabled"]) || typeof c.enabled !== "boolean") return fail("enabled must be a boolean");
       return { ok: true, value: { type: c.type, enabled: c.enabled } };
     case "pairing.confirm":
@@ -53,6 +55,7 @@ export function parseCommand(raw: unknown): Parsed<Command> {
       return { ok: true, value: { type: c.type, accept: c.accept } };
     case "input.returnLocal":
     case "audio.resetDevices":
+    case "files.open":
     case "pairing.cancel":
     case "peer.forget":
       if (!onlyKeys(c, ["type"])) return fail("unexpected field");

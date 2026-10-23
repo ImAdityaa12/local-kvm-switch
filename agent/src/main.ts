@@ -16,7 +16,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION, isLanAddress, type AgentError, type Machine } from "../../lib/protocol/index.ts";
-import { Controller, type ModeControl, type Pairing } from "./controller.ts";
+import { Controller, type ModeControl, type Pairing, type SharingControl } from "./controller.ts";
 import { EngineError, type AudioEngine, type InputEngine } from "./engines.ts";
 import { DESKFLOW_SERVER_PORT, DESKFLOW_TUNNEL_PORT } from "./deskflow/config.ts";
 import { DeskflowClient, DeskflowServerInput, LaptopInput, type CursorEvent, type DeskflowPaths } from "./deskflow/engines.ts";
@@ -28,6 +28,8 @@ import { DAEMON_PIPE, daemonRequest, daemonRunning } from "./deskflow/daemon.ts"
 import { NullAudio } from "./null-audio.ts";
 import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudio, MIC_SEND_PORT, MIC_TUNNEL_PORT } from "./audio/engine.ts";
 import { helperPath } from "./audio/helper.ts";
+import { CLIPBOARD_TARGET, ClipboardShare, clipHelperPath } from "./sharing/clipboard.ts";
+import { FILES_TARGET, FILES_SERVE_PORT, FILES_TUNNEL_PORT, FileShare, initialFilesState, pathMap } from "./sharing/files.ts";
 import { lanAddresses } from "./peer/discovery.ts";
 import { LINK_PORT, PeerLink, type PeerRequest } from "./peer/link.ts";
 import { PairingManager } from "./peer/manager.ts";
@@ -61,6 +63,8 @@ const { values } = parseArgs({
     "no-endpoint": { type: "boolean", default: false },
     "no-tray": { type: "boolean", default: false },
     "log-db": { type: "string" },
+    // Default: rclone on PATH or where winget installs it (npm run setup:files).
+    rclone: { type: "string" },
   },
 });
 
@@ -97,13 +101,17 @@ const name = hostname();
 interface Settings {
   /** Gaming PC: switching at the screen edges. */
   edgeSwitch?: boolean;
+  /** Share the clipboard with the other machine (on unless turned off). */
+  clipboard?: boolean;
+  /** Offer this machine's drives to the other machine (on unless turned off). */
+  files?: boolean;
 }
 const settingsFile = join(dir, "settings.json");
 
 function loadSettings(): Settings {
   try {
     const s = JSON.parse(readFileSync(settingsFile, "utf8")) as Settings;
-    return { edgeSwitch: s.edgeSwitch === true };
+    return { edgeSwitch: s.edgeSwitch === true, clipboard: s.clipboard !== false, files: s.files !== false };
   } catch {
     return {};
   }
@@ -161,6 +169,10 @@ async function buildSimulated(): Promise<Built> {
       micToLaptop: { ...idleRoute(), deviceId: devices.capture.find((d) => d.isDefault)?.id ?? null, virtualEndpoint: await audio.virtualEndpoint() },
     },
     devices,
+    sharing: {
+      clipboard: { enabled: true, available: true, last: { at: Date.now(), direction: "received", what: "text" } },
+      files: { enabled: true, missing: [], serving: ["C", "D"], remote: { offered: true, status: "mounted", letter: "L" } },
+    },
     events: [],
   });
   const pairing = new SimPairing(world, store, () => {
@@ -170,7 +182,19 @@ async function buildSimulated(): Promise<Built> {
     store.log("info", "Paired with Laptop (simulated)");
   });
   let mode: ModeRunner | null = null;
-  const controller = new Controller({ store, input, audio, peer: world.peer, pairing, sim: world, mode: () => mode });
+  const sharing: SharingControl = {
+    setClipboard: async (on) =>
+      store.update((s) => {
+        s.sharing!.clipboard.enabled = on;
+      }),
+    setFiles: async (on) =>
+      store.update((s) => {
+        s.sharing!.files.enabled = on;
+        s.sharing!.files.serving = on ? ["C", "D"] : null;
+      }),
+    openDrive: () => Promise.reject(new EngineError({ code: "not-supported", message: "The simulated laptop has no drive to open." })),
+  };
+  const controller = new Controller({ store, input, audio, peer: world.peer, pairing, sim: world, mode: () => mode, sharing });
   // No monitor to switch, and the simulated laptop's display layout always "succeeds".
   mode = new ModeRunner({
     store,
@@ -249,7 +273,39 @@ async function buildReal(): Promise<Built> {
       micToLaptop: { ...idleRoute(), deviceId: devices.capture.find((d) => d.isDefault)?.id ?? null, virtualEndpoint: await audio.virtualEndpoint() },
     },
     devices,
+    sharing: {
+      clipboard: { enabled: loadSettings().clipboard !== false, available: false, last: null },
+      files: initialFilesState(loadSettings().files !== false),
+    },
     events: [],
+  });
+  // The other machine's drives as a drive letter, and this machine's for it (sharing/files.ts).
+  const filesShare = new FileShare({
+    machine,
+    dir,
+    store,
+    psk: () => trust.load()?.psk ?? null,
+    online: () => link.online,
+    announce: (serving) => link.emit({ op: "files.status", serving }),
+    saveEnabled: (on) => saveSettings({ files: on }),
+    rclone: values.rclone,
+  });
+  // Copies cross both ways; copied files are pasted from the other machine's drive (sharing/clipboard.ts).
+  const clipboard = new ClipboardShare({
+    exe: clipHelperPath(repoRoot),
+    enabled: () => store.state.sharing?.clipboard.enabled === true,
+    online: () => link.online,
+    open: (target) => link.openStream(target),
+    paths: pathMap({ serving: () => store.state.sharing?.files.serving ?? null, peerServing: () => filesShare.peerDrives, mounted: () => filesShare.mountedLetter }),
+    onSync: (direction, what) =>
+      store.update((s) => {
+        s.sharing!.clipboard.last = { at: Date.now(), direction, what };
+      }),
+    log: (level, message) => store.log(level, message),
+    onAvailable: (available) =>
+      store.update((s) => {
+        s.sharing!.clipboard.available = available;
+      }),
   });
   const laptopAudio =
     machine === "laptop" && haveHelper ? new LaptopAudio(helperExe, (l, m) => store.log(l, m), (evt) => link.emit(evt), join(dir, "own-audio-devices.json")) : null;
@@ -303,15 +359,21 @@ async function buildReal(): Promise<Built> {
       trust.save({ ...peer, address });
       store.log("info", `Found ${peer.name} at its new address ${address} (it was ${peer.address ?? "unknown"})`);
     },
-    tunnelTargets: machine === "gaming-pc" ? { deskflow: DESKFLOW_SERVER_PORT, audio: AUDIO_PLAY_PORT, mic: MIC_SEND_PORT } : undefined,
-    tunnelListeners:
-      machine === "laptop"
+    tunnelTargets: {
+      ...(machine === "gaming-pc" ? { deskflow: DESKFLOW_SERVER_PORT, audio: AUDIO_PLAY_PORT, mic: MIC_SEND_PORT } : {}),
+      [FILES_TARGET]: FILES_SERVE_PORT,
+      [CLIPBOARD_TARGET]: clipboard.receive,
+    },
+    tunnelListeners: [
+      ...(machine === "laptop"
         ? [
             { name: "deskflow", localPort: DESKFLOW_TUNNEL_PORT },
             { name: "audio", localPort: AUDIO_TUNNEL_PORT },
             { name: "mic", localPort: MIC_TUNNEL_PORT },
           ]
-        : undefined,
+        : []),
+      { name: FILES_TARGET, localPort: FILES_TUNNEL_PORT },
+    ],
     onLink: (online, info) => {
       if (online) {
         store.update((s) => {
@@ -320,6 +382,7 @@ async function buildReal(): Promise<Built> {
         });
       }
       events.fire(online, info.error);
+      filesShare.linkChanged(online);
       if (online) void laptopAudio?.announceEndpoint();
       // Each side tells the other what it knows: the laptop its display layout, the gaming PC the mode.
       if (online && machine === "laptop") void layout.get().then((topology) => link.emit({ op: "display.status", topology }), () => {});
@@ -405,6 +468,7 @@ async function buildReal(): Promise<Built> {
         if (evt.engine === "error") store.log("error", "Deskflow could not start on the laptop");
         return;
       }
+      if (evt.op === "files.status") return filesShare.peerServing(evt.serving);
       if (!helperAudio) return;
       if (evt.op === "audio.endpoint") {
         const ep = { present: evt.present, name: evt.name ?? undefined, isDefault: evt.isDefault };
@@ -475,7 +539,18 @@ async function buildReal(): Promise<Built> {
               ? link.request({ op: "input.setEdge", enabled: on }, 20_000)
               : Promise.reject(new EngineError({ code: "peer-unreachable", message: "The gaming PC is not reachable; it keeps the edge-switch setting." })),
         };
-  const controller = new Controller({ store, input, audio, peer: events, pairing, mode: () => modeControl, resetDevices, ...edge });
+  const sharing: SharingControl = {
+    setClipboard: async (on) => {
+      saveSettings({ clipboard: on });
+      store.update((s) => {
+        s.sharing!.clipboard.enabled = on;
+      });
+      store.log("info", on ? "The clipboard is shared with the other machine" : "The clipboard is no longer shared with the other machine");
+    },
+    setFiles: (on) => filesShare.setEnabled(on),
+    openDrive: () => filesShare.openDrive(),
+  };
+  const controller = new Controller({ store, input, audio, peer: events, pairing, mode: () => modeControl, resetDevices, sharing, ...edge });
   if (machine === "gaming-pc") {
     // The laptop's dashboard and tray show the setting.
     let sentEdge = store.state.input.edgeSwitch;
@@ -498,6 +573,8 @@ async function buildReal(): Promise<Built> {
     });
     await modeRunner.refreshMonitor();
   }
+  if (!clipboard.start()) store.log("warn", "The clipboard helper is not built, so the clipboard is not shared. Run npm.cmd run build:audio, then restart the agent.");
+  await filesShare.start();
   try {
     await link.start();
   } catch (e) {
@@ -507,6 +584,8 @@ async function buildReal(): Promise<Built> {
   // Devices come and go (USB DACs, HDMI); keep the list current without ever
   // changing the selected device on our own.
   const refresh = setInterval(async () => {
+    // rclone and WinFsp may have just been installed (npm run setup:files).
+    filesShare.refreshTools();
     // The laptop re-reports its virtual microphone (VB-CABLE can be installed or removed).
     if (machine === "laptop") return void (link.online && laptopAudio?.announceEndpoint());
     // The monitor's input can also change from its own buttons.
@@ -544,6 +623,8 @@ async function buildReal(): Promise<Built> {
     controller,
     dispose: async () => {
       clearInterval(refresh);
+      clipboard.stop();
+      await filesShare.dispose();
       await laptopAudio?.stop("laptopToPc");
       await laptopAudio?.stop("micToLaptop");
       await link.stop();

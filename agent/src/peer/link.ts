@@ -5,13 +5,18 @@
 // certificates. The gaming PC listens; the laptop dials, and finds the gaming
 // PC again on the LAN when its address changed (discovery.ts).
 //
-// Besides control messages, the laptop can open tunnels: each one is its own
-// PSK-authenticated TLS connection whose first frame names the target, after
-// which bytes are piped to a loopback port on the gaming PC. Deskflow runs
-// over these tunnels, so its port is never exposed to the network.
+// Besides control messages, either machine can open streams to a named target
+// on the other: each one is its own PSK-authenticated TLS connection, after
+// which bytes are piped to a loopback port (a tunnel) or handed to the agent.
+// The laptop dials them with a first frame naming the target; the gaming PC,
+// which the laptop never listens for, asks over the control session and the
+// laptop dials back. Deskflow runs over tunnels, so its port is never exposed
+// to the network.
 
+import { randomBytes } from "node:crypto";
 import type dgram from "node:dgram";
 import net from "node:net";
+import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import type { AgentError, AudioFormat, DisplayTopology, InputEngineStatus, Machine, ModeState, ModeStepId, ModeStepStatus, RouteId } from "../../../lib/protocol/index.ts";
 import { EngineError } from "../engines.ts";
@@ -27,6 +32,9 @@ const HEARTBEAT_MS = 2_000;
 const DEAD_AFTER_MS = 6_500;
 const REQUEST_TIMEOUT_MS = 10_000;
 const RECONNECT_MAX_MS = 10_000;
+/** How long the gaming PC waits for the laptop to dial back a stream it asked for. */
+const OPEN_TIMEOUT_MS = 10_000;
+const MAX_OPENS = 32;
 /** Laptop: how often to look for the gaming PC on the LAN while its saved address does not answer. */
 const FIND_EVERY_MS = 10_000;
 
@@ -54,6 +62,8 @@ export type PeerEvent =
   | { op: "edge.status"; enabled: boolean }
   /** Laptop → gaming PC: the laptop's current display layout. */
   | { op: "display.status"; topology: DisplayTopology }
+  /** Either way: the drives this machine offers the other (sharing/files.ts); null for none. */
+  | { op: "files.status"; serving: string[] | null }
   /** Laptop → gaming PC: the virtual microphone the laptop can feed. */
   | { op: "audio.endpoint"; present: boolean; name: string | null; isDefault: boolean | null }
   /** Laptop → gaming PC: health of the mic player on the laptop. */
@@ -80,9 +90,9 @@ export interface LinkOptions {
   /** Laptop: the gaming PC answered at a new address and the link is up there; save it. */
   onMoved?(address: string): void;
   port?: number;
-  /** Gaming PC: loopback ports reachable through tunnels, by name. */
-  tunnelTargets?: Record<string, number>;
-  /** Laptop: local loopback listeners that tunnel to a named target on the gaming PC. */
+  /** What the other machine may open streams to, by name: a loopback port, or a handler in this agent. */
+  tunnelTargets?: Record<string, number | ((sock: Duplex) => void)>;
+  /** Local loopback listeners whose connections are tunnelled to a named target on the other machine. */
   tunnelListeners?: { name: string; localPort: number }[];
   onLink(online: boolean, info: { name?: string; address?: string; error?: AgentError }): void;
   /** Any authenticated message arrived (heartbeats included). */
@@ -179,6 +189,11 @@ function parseEvent(m: Record<string, unknown>): PeerEvent | null {
     return mode ? { op: "mode.status", mode } : null;
   }
   if (b?.op === "edge.status") return typeof b.enabled === "boolean" ? { op: "edge.status", enabled: b.enabled } : null;
+  if (b?.op === "files.status") {
+    if (b.serving === null) return { op: "files.status", serving: null };
+    const drives = Array.isArray(b.serving) && b.serving.length <= 26 && b.serving.every((d) => typeof d === "string" && /^[A-Z]$/.test(d)) ? (b.serving as string[]) : null;
+    return drives ? { op: "files.status", serving: [...new Set(drives)] } : null;
+  }
   if (b?.op === "display.status") {
     return TOPOLOGIES.includes(b.topology as DisplayTopology) ? { op: "display.status", topology: b.topology as DisplayTopology } : null;
   }
@@ -248,6 +263,8 @@ export class PeerLink {
   #tunnelServers: net.Server[] = [];
   #session: ControlSession | null = null;
   #pending = new Map<string, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  /** Gaming PC: streams it asked the laptop to dial back, by id. */
+  #opens = new Map<string, { resolve: (sock: tls.TLSSocket) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   #seq = 0;
   #stopped = false;
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -273,10 +290,9 @@ export class PeerLink {
       const d = this.#o.discovery;
       // Without it the laptop can still dial a saved address, so a busy port is not fatal.
       if (d) this.#discovery = await answerDiscovery({ trust: this.#o.trust, port: d.port }).catch(() => null);
-    } else {
-      for (const t of this.#o.tunnelListeners ?? []) await this.#listenTunnel(t.name, t.localPort);
-      this.#dial();
     }
+    for (const t of this.#o.tunnelListeners ?? []) await this.#listenTunnel(t.name, t.localPort);
+    if (this.#o.machine === "laptop") this.#dial();
   }
 
   async stop(): Promise<void> {
@@ -317,6 +333,11 @@ export class PeerLink {
     this.#session?.ch.send({ t: "evt", body: evt });
   }
 
+  /** A stream to a named target on the other machine (its tunnelTargets). It starts paused: pipe it, or resume() once listening. */
+  openStream(target: string): Promise<tls.TLSSocket> {
+    return this.#o.machine === "laptop" ? this.#dialStream({ t: "tunnel", target }) : this.#askStream(target);
+  }
+
   // ---- gaming PC ----
 
   #listen(): Promise<void> {
@@ -352,7 +373,8 @@ export class PeerLink {
     const first = setTimeout(() => sock.destroy(), 3_000);
     ch.onMessage((m) => {
       clearTimeout(first);
-      if (m.t === "tunnel" && typeof m.target === "string") return this.#serveTunnel(sock, ch, m.target);
+      if (m.t === "tunnel" && typeof m.target === "string") return this.#serveTarget(sock, ch.detach(), m.target);
+      if (m.t === "back" && typeof m.id === "string") return this.#takeBack(sock, ch.detach(), m.id);
       if (m.t === "hello") {
         const s = this.#adopt(sock, ch);
         this.#onMessage(s, m);
@@ -363,10 +385,45 @@ export class PeerLink {
     sock.on("error", () => {});
   }
 
-  #serveTunnel(sock: tls.TLSSocket, ch: FrameChannel, target: string): void {
-    const port = this.#o.tunnelTargets?.[target];
-    if (port === undefined) return void sock.destroy();
-    const rest = ch.detach();
+  /** Gaming PC: asks the laptop to dial back a stream to `target`. */
+  #askStream(target: string): Promise<tls.TLSSocket> {
+    const s = this.#session;
+    if (!s || !s.peerName) return Promise.reject(new EngineError(UNREACHABLE));
+    if (this.#opens.size >= MAX_OPENS) return Promise.reject(new EngineError({ ...UNREACHABLE, message: "Too many streams are opening at once" }));
+    const id = randomBytes(9).toString("base64url");
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#opens.delete(id);
+        reject(new EngineError({ ...UNREACHABLE, message: "The other agent did not open the stream in time" }));
+      }, OPEN_TIMEOUT_MS);
+      this.#opens.set(id, { resolve, reject, timer });
+      s.ch.send({ t: "open", id, target });
+    });
+  }
+
+  /** Gaming PC: the laptop dialed back a stream it was asked for. */
+  #takeBack(sock: tls.TLSSocket, rest: Buffer, id: string): void {
+    const open = this.#opens.get(id);
+    if (!open) return void sock.destroy();
+    this.#opens.delete(id);
+    clearTimeout(open.timer);
+    if (rest.length) sock.unshift(rest);
+    open.resolve(sock);
+  }
+
+  /** Bytes from the other machine for `target`: piped to its loopback port, or handed to its handler. */
+  #serveTarget(sock: tls.TLSSocket, rest: Buffer, target: string): void {
+    const targets = this.#o.tunnelTargets ?? {};
+    const to = Object.hasOwn(targets, target) ? targets[target] : undefined;
+    if (to === undefined) return void sock.destroy();
+    sock.on("error", () => {});
+    if (typeof to === "function") {
+      if (rest.length) sock.unshift(rest);
+      to(sock);
+      sock.resume();
+      return;
+    }
+    const port = to;
     const local = net.connect({ host: "127.0.0.1", port }, () => {
       local.setNoDelay(true);
       if (rest.length) local.write(rest);
@@ -443,30 +500,61 @@ export class PeerLink {
     }, wait);
   }
 
-  #listenTunnel(name: string, localPort: number): Promise<void> {
-    const server = net.createServer((local) => {
-      local.setNoDelay(true);
-      local.pause();
-      const peer = this.#o.trust();
-      if (!peer || !peer.address) return void local.destroy();
+  /** Laptop: a new PSK-authenticated connection to the gaming PC whose first frame is `first`. */
+  #dialStream(first: object): Promise<tls.TLSSocket> {
+    const peer = this.#o.trust();
+    const host = peer?.address;
+    if (!peer || !host) return Promise.reject(new EngineError(UNREACHABLE));
+    return new Promise((resolve, reject) => {
       const remote = tls.connect({
         ...TLS_OPTS,
-        host: peer.address,
+        host,
         port: this.#o.port ?? LINK_PORT,
         checkServerIdentity: () => undefined,
         pskCallback: () => ({ psk: peer.psk, identity: peer.id }),
       });
       remote.setNoDelay(true);
+      const fail = () => reject(new EngineError(UNREACHABLE));
+      remote.once("error", fail);
+      remote.once("close", fail);
       remote.once("secureConnect", () => {
-        remote.write(JSON.stringify({ t: "tunnel", target: name }) + "\n");
-        local.pipe(remote);
-        remote.pipe(local);
-        local.resume();
+        remote.off("error", fail);
+        remote.off("close", fail);
+        remote.on("error", () => {});
+        remote.write(JSON.stringify(first) + "\n");
+        remote.pause();
+        resolve(remote);
       });
-      remote.on("error", () => local.destroy());
-      local.on("error", () => remote.destroy());
-      remote.on("close", () => local.destroy());
-      local.on("close", () => remote.destroy());
+    });
+  }
+
+  /** Laptop: the gaming PC asked for a stream to one of this laptop's targets; dial it back. */
+  #dialBack(id: string, target: string): void {
+    if (!Object.hasOwn(this.#o.tunnelTargets ?? {}, target)) return;
+    this.#dialStream({ t: "back", id }).then(
+      (sock) => this.#serveTarget(sock, Buffer.alloc(0), target),
+      () => {},
+    );
+  }
+
+  #listenTunnel(name: string, localPort: number): Promise<void> {
+    const server = net.createServer((local) => {
+      local.setNoDelay(true);
+      local.pause();
+      local.on("error", () => {});
+      this.openStream(name).then(
+        (remote) => {
+          if (local.destroyed) return void remote.destroy();
+          local.pipe(remote);
+          remote.pipe(local);
+          local.resume();
+          remote.on("error", () => local.destroy());
+          local.on("error", () => remote.destroy());
+          remote.on("close", () => local.destroy());
+          local.on("close", () => remote.destroy());
+        },
+        () => local.destroy(),
+      );
     });
     this.#tunnelServers.push(server);
     return new Promise((resolve, reject) => {
@@ -515,6 +603,10 @@ export class PeerLink {
       }
       case "ping":
         s.ch.send({ t: "pong", n: m.n });
+        return;
+      case "open":
+        // Only the gaming PC asks; the laptop dials back to one of its own targets.
+        if (this.#o.machine === "laptop" && s.peerName && typeof m.id === "string" && m.id.length <= 16 && typeof m.target === "string") this.#dialBack(m.id, m.target);
         return;
       case "pong":
         return;
@@ -576,10 +668,11 @@ export class PeerLink {
     this.#session = null;
     s?.close();
     if (failPending) {
-      for (const [id, p] of this.#pending) {
+      for (const [id, p] of [...this.#pending, ...this.#opens]) {
         clearTimeout(p.timer);
         p.reject(new EngineError(UNREACHABLE));
         this.#pending.delete(id);
+        this.#opens.delete(id);
       }
     }
   }

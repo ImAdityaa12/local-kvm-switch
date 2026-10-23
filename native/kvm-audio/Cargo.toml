@@ -7,8 +7,9 @@ edition = "2024"
 serde_json = "1"
 wasapi = "0.26.0"
 
-# The tray icon (src/bin/kvm-tray.rs) and display control (src/bin/kvm-display.rs).
-# Default devices (src/devices.rs) use it too. Same windows crate version wasapi already pulls in.
+# The tray icon (src/bin/kvm-tray.rs), display control (src/bin/kvm-display.rs) and the shared
+# clipboard (src/bin/kvm-clip.rs). Default devices (src/devices.rs) use it too. Same windows crate
+# version wasapi already pulls in.
 [dependencies.windows]
 version = "0.62.2"
 features = [
@@ -17,7 +18,9 @@ features = [
   "Win32_Graphics_Gdi",
   "Win32_Media_Audio",
   "Win32_System_Com",
+  "Win32_System_DataExchange",
   "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
   "Win32_UI_HiDpi",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",

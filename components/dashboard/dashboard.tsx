@@ -10,6 +10,7 @@ import { Activity, PeerPanel } from "./peer-panel";
 import { ErrorNote, Fact, Status } from "./bits";
 import { ENGINE_TEXT } from "./format";
 import { DisplayFacts, ModeSteps } from "./mode-steps";
+import { SharingPanel } from "./sharing-panel";
 
 function useNow(intervalMs = 1000) {
   const [now, setNow] = useState(0);
@@ -108,6 +109,7 @@ function Connected({
 
       {state.agent.machine === "laptop" ? <LaptopInput state={state} send={send} /> : <TargetSwitch state={state} send={send} />}
       {state.agent.machine === "laptop" ? <LaptopAudio state={state} send={send} /> : state.agent.engines.audio === "none" ? <AudioLater /> : <AudioSection state={state} send={send} now={now} />}
+      <SharingPanel state={state} send={send} now={now} />
 
       <div className="mt-28 grid gap-2 md:mt-40 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         <PeerPanel state={state} send={send} now={now} />

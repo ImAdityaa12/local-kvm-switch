@@ -187,6 +187,40 @@ export interface AgentEvent {
   message: string;
 }
 
+/** What is missing on this machine for files: rclone serves and mounts, WinFsp mounts. */
+export type FilesTool = "rclone" | "winfsp";
+
+/**
+ * Clipboard and file sharing with the other machine. Both go over the peer link only.
+ * Each machine decides for itself: its clipboard switch covers what it sends and takes,
+ * its files switch covers whether the other machine may open its drives.
+ */
+export interface SharingState {
+  clipboard: {
+    enabled: boolean;
+    /** The clipboard helper is built and running. */
+    available: boolean;
+    /** The last copy that crossed, without its content. */
+    last: { at: number; direction: "sent" | "received"; what: string } | null;
+    error?: AgentError;
+  };
+  files: {
+    /** This machine's drives are offered to the other machine. */
+    enabled: boolean;
+    missing: FilesTool[];
+    /** rclone is serving these drives of this machine, e.g. ["C", "D"]. */
+    serving: string[] | null;
+    /** The other machine's drives, as one drive letter on this machine. */
+    remote: {
+      /** The other machine offers its drives. */
+      offered: boolean;
+      status: "off" | "mounting" | "mounted" | "error";
+      letter: string | null;
+      error?: AgentError;
+    };
+  };
+}
+
 export interface AgentState {
   agent: {
     name: string;
@@ -207,6 +241,8 @@ export interface AgentState {
     micToLaptop: RouteState & { virtualEndpoint: VirtualEndpointState };
   };
   devices: { playback: AudioDevice[]; capture: AudioDevice[] };
+  /** Absent from agents older than clipboard and file sharing. */
+  sharing?: SharingState;
   events: AgentEvent[];
 }
 
@@ -225,6 +261,12 @@ export type Command =
   | { type: "audio.setMuted"; route: RouteId; muted: boolean }
   /** Laptop: Windows' default speaker and mic to what Laptop mode uses while it is on, else the laptop's own. */
   | { type: "audio.resetDevices" }
+  /** Send what is copied here to the other machine, and take what is copied there. */
+  | { type: "sharing.setClipboard"; enabled: boolean }
+  /** Let the other machine open this machine's drives. */
+  | { type: "sharing.setFiles"; enabled: boolean }
+  /** Open the other machine's drive in Explorer. */
+  | { type: "files.open" }
   | { type: "pairing.begin"; address?: string }
   | { type: "pairing.confirm"; accept: boolean }
   | { type: "pairing.cancel" }
