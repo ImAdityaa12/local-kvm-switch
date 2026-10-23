@@ -2,18 +2,21 @@
 //
 // TLS 1.2 with a pre-shared key from pairing (ECDHE-PSK-CHACHA20-POLY1305):
 // mutual authentication and forward secrecy from a reviewed protocol, with no
-// certificates. The gaming PC listens; the laptop dials.
+// certificates. The gaming PC listens; the laptop dials, and finds the gaming
+// PC again on the LAN when its address changed (discovery.ts).
 //
 // Besides control messages, the laptop can open tunnels: each one is its own
 // PSK-authenticated TLS connection whose first frame names the target, after
 // which bytes are piped to a loopback port on the gaming PC. Deskflow runs
 // over these tunnels, so its port is never exposed to the network.
 
+import type dgram from "node:dgram";
 import net from "node:net";
 import tls from "node:tls";
 import type { AgentError, AudioFormat, DisplayTopology, InputEngineStatus, Machine, ModeState, ModeStepId, ModeStepStatus, RouteId } from "../../../lib/protocol/index.ts";
 import { EngineError } from "../engines.ts";
 import { makeRateLimiter } from "../rate-limit.ts";
+import { answerDiscovery, findGamingPc, isLanPeer, lookupName } from "./discovery.ts";
 import { frameChannel, type FrameChannel } from "./frames.ts";
 import type { TrustedPeer } from "./trust.ts";
 
@@ -24,6 +27,8 @@ const HEARTBEAT_MS = 2_000;
 const DEAD_AFTER_MS = 6_500;
 const REQUEST_TIMEOUT_MS = 10_000;
 const RECONNECT_MAX_MS = 10_000;
+/** Laptop: how often to look for the gaming PC on the LAN while its saved address does not answer. */
+const FIND_EVERY_MS = 10_000;
 
 export type PeerRequest =
   | { op: "input.prepare" }
@@ -65,8 +70,15 @@ export interface LinkOptions {
   name: string;
   version: string;
   trust: () => TrustedPeer | null;
-  /** Gaming PC: address to listen on. */
+  /** Gaming PC: address to listen on; 0.0.0.0 for every adapter. Only LAN peers are accepted either way. */
   bind?: string;
+  /**
+   * Finding the gaming PC after its address changed (discovery.ts). The gaming PC answers on
+   * this port; the laptop asks there when its saved address stops answering. Off when absent.
+   */
+  discovery?: { port?: number; targets?: string[] };
+  /** Laptop: the gaming PC answered at a new address and the link is up there; save it. */
+  onMoved?(address: string): void;
   port?: number;
   /** Gaming PC: loopback ports reachable through tunnels, by name. */
   tunnelTargets?: Record<string, number>;
@@ -240,6 +252,11 @@ export class PeerLink {
   #stopped = false;
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   #attempt = 0;
+  #discovery: dgram.Socket | null = null;
+  /** Laptop: where discovery last found the gaming PC, tried before the saved address until a link is up. */
+  #candidate: string | null = null;
+  #finding = false;
+  #lastFind = 0;
 
   constructor(opts: LinkOptions) {
     this.#o = opts;
@@ -251,8 +268,12 @@ export class PeerLink {
 
   async start(): Promise<void> {
     this.#stopped = false;
-    if (this.#o.machine === "gaming-pc") await this.#listen();
-    else {
+    if (this.#o.machine === "gaming-pc") {
+      await this.#listen();
+      const d = this.#o.discovery;
+      // Without it the laptop can still dial a saved address, so a busy port is not fatal.
+      if (d) this.#discovery = await answerDiscovery({ trust: this.#o.trust, port: d.port }).catch(() => null);
+    } else {
       for (const t of this.#o.tunnelListeners ?? []) await this.#listenTunnel(t.name, t.localPort);
       this.#dial();
     }
@@ -262,6 +283,8 @@ export class PeerLink {
     this.#stopped = true;
     if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
     this.#dropSession();
+    this.#discovery?.close();
+    this.#discovery = null;
     await Promise.all([
       new Promise<void>((r) => (this.#server ? this.#server.close(() => r()) : r())),
       ...this.#tunnelServers.map((s) => new Promise<void>((r) => s.close(() => r()))),
@@ -304,6 +327,10 @@ export class PeerLink {
         const peer = this.#o.trust();
         return peer && identity === peer.id ? peer.psk : null;
       },
+    });
+    // Before TLS: nothing outside the LAN gets as far as a handshake.
+    server.on("connection", (sock: net.Socket) => {
+      if (!isLanPeer(sock.remoteAddress)) sock.destroy();
     });
     server.on("secureConnection", (sock) => this.#accept(sock));
     server.on("tlsClientError", () => {
@@ -357,10 +384,11 @@ export class PeerLink {
   #dial(): void {
     if (this.#stopped || this.#session) return;
     const peer = this.#o.trust();
-    if (!peer || !peer.address) return;
+    const host = this.#candidate ?? peer?.address;
+    if (!peer || !host) return;
     const sock = tls.connect({
       ...TLS_OPTS,
-      host: peer.address,
+      host,
       port: this.#o.port ?? LINK_PORT,
       checkServerIdentity: () => undefined,
       pskCallback: () => ({ psk: peer.psk, identity: peer.id }),
@@ -370,6 +398,11 @@ export class PeerLink {
     sock.once("secureConnect", () => {
       adopted = true;
       this.#attempt = 0;
+      // The key proved it is the gaming PC: from now on dial it here.
+      if (this.#candidate) {
+        this.#candidate = null;
+        if (host !== peer.address) this.#o.onMoved?.(host);
+      }
       const ch = frameChannel(sock, () => sock.destroy());
       const s = this.#adopt(sock, ch);
       ch.send({ t: "hello", name: this.#o.name, machine: this.#o.machine, version: this.#o.version });
@@ -377,8 +410,28 @@ export class PeerLink {
     });
     sock.on("error", () => {});
     sock.on("close", () => {
-      if (!adopted) this.#scheduleDial();
+      if (adopted) return;
+      if (host === this.#candidate) this.#candidate = null;
+      this.#scheduleDial();
+      this.#find(peer);
     });
+  }
+
+  /** Laptop: the saved address keeps failing, so ask the LAN where the gaming PC is now. */
+  #find(peer: TrustedPeer): void {
+    const d = this.#o.discovery;
+    if (!d || this.#finding || this.#stopped || this.#attempt < 2 || Date.now() - this.#lastFind < FIND_EVERY_MS) return;
+    this.#finding = true;
+    this.#lastFind = Date.now();
+    void (async () => {
+      const found = (await findGamingPc(peer, d)) ?? (await lookupName(peer.name));
+      this.#finding = false;
+      if (!found || found === peer.address || this.#session || this.#stopped) return;
+      this.#candidate = found;
+      if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = null;
+      this.#dial();
+    })();
   }
 
   #scheduleDial(delay?: number): void {

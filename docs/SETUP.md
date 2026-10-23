@@ -106,8 +106,10 @@ so no Rust is needed on the gaming PC.
 
 ## Part 3: Pair the two machines (once)
 
-1. **Gaming PC: find its address.** Run `ipconfig` and note the **IPv4 Address** of the adapter you
-   use (Ethernet or Wi-Fi), for example `192.168.1.20`. Both machines must be on the same network.
+1. **Gaming PC: find its address.** The gaming PC dashboard shows it under **Pair your laptop** once
+   pairing is open (or run `ipconfig` and note the **IPv4 Address**, for example `192.168.1.20`).
+   Both machines must be on the same network. You type it only this once: if the gaming PC's
+   address changes later, the laptop finds it again on its own.
 2. **Gaming PC: start the agent and the dashboard** (Part 4, steps 1–2).
 3. **Laptop: start the agent and the dashboard** (Part 4, steps 3–4).
 4. **Gaming PC dashboard:** scroll to **Pair your laptop** → **Open pairing for two minutes**.
@@ -125,14 +127,16 @@ so no Rust is needed on the gaming PC.
 No terminals, no Next.js server, no browser tab left open. Close any agent or `npm run dev` you
 started in a terminal first, then:
 
-- **Gaming PC** (with its address):
+- **Gaming PC** (no address needed; it listens on every network adapter, so a new address from the
+  router needs nothing from you):
   ```
   cd local-kvm-switch
   npm.cmd install
   npm.cmd run build
   npm.cmd run build:audio
-  npm.cmd run autostart -- install --machine gaming-pc --bind 192.168.1.20
+  npm.cmd run autostart -- install --machine gaming-pc
   ```
+  If you installed it before with `--bind`, run this install once more without it.
 - **Laptop:**
   ```
   cd C:\Users\Lenovo\Desktop\local-kvm-switcher
@@ -171,7 +175,7 @@ changed) again, then run
 
 ### Or: in terminals, by hand
 
-1. **Agent:** `node agent/src/main.ts --machine gaming-pc --bind 192.168.1.20` on the gaming PC, or
+1. **Agent:** `node agent/src/main.ts --machine gaming-pc` on the gaming PC, or
    `node agent/src/main.ts --machine laptop` on the laptop. The first time, Windows Firewall asks
    about Node.js: tick **Private networks** only → **Allow**.
 2. Open the link it prints. If you ran `npm.cmd run build`, the agent serves the dashboard itself.
@@ -278,7 +282,7 @@ a quick move to the left edge sends the keyboard and mouse to the laptop.
 | "The display helper is not built" | Run `npm.cmd run build:audio` on that machine (it builds `kvm-display.exe` with the audio helper), then restart the agent. |
 | "The Deskflow app is already running Deskflow" | The agent closes the app by itself, so this means it could not. Right-click the Deskflow tray icon → **Quit**, and Task Manager → **Startup apps** → **Deskflow** → **Disable**. |
 | Clicking **Laptop** never reaches *Press Ctrl+Alt+Left* (or Ctrl+Alt+Left does nothing), and the laptop's log says *Local input confirmed…* right after the switch starts | The laptop is running an older version that stopped its own Deskflow straight away. Update the laptop (`git pull`, Part 2) and restart the laptop agent. |
-| Laptop shows **Unreachable** | Same network? Correct `--bind` address on the gaming PC? Allowed Node.js through the firewall for **Private** networks? Network set to **Private**, not Public, in Windows settings? |
+| Laptop shows **Unreachable** | Same network? Allowed Node.js through the firewall for **Private** networks (both TCP and UDP; the laptop finds a gaming PC whose address changed over UDP 47823)? Network set to **Private**, not Public, in Windows settings? If the gaming PC's address changed, the laptop's log says *Found … at its new address* within about 15 s; if it never does, pair again with the new address. |
 | Pairing: "Could not reach …" | Open pairing on the gaming PC first; it stays open for two minutes. Check the address. |
 | "The laptop's sound output is "CABLE …", the microphone's cable", or the microphone fails with *0x8889000A* | On the laptop: right-click the LAN KVM tray icon → **Reset mic and speaker** while in Laptop mode, or Settings → System → Sound → Output → **Voicemeeter Input** (Part 1, step 6), or your speakers or headphones. Sound sent to "CABLE In 16ch" keeps the microphone from opening "CABLE Input". |
 | "The laptop has no virtual microphone" | Install VB-CABLE on the laptop (Part 1, step 5), reboot, restart the laptop agent. |

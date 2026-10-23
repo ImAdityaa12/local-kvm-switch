@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import dgram from "node:dgram";
 import net from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +12,7 @@ import { comparisonCode, commitment, derivePsk } from "../src/peer/pairing.ts";
 import { PairingManager } from "../src/peer/manager.ts";
 import { TrustStore, type TrustedPeer } from "../src/peer/trust.ts";
 import { PeerLink, type PeerRequest } from "../src/peer/link.ts";
+import { answerDiscovery, findGamingPc, isLanPeer } from "../src/peer/discovery.ts";
 
 const until = async (cond: () => boolean, ms = 3000) => {
   const end = Date.now() + ms;
@@ -180,4 +182,64 @@ test("peer link: a device with the wrong key never comes online", async () => {
   assert.equal(impostor.online, false);
   await impostor.stop();
   await pc.stop();
+});
+
+async function freeUdpPort(): Promise<number> {
+  const s = dgram.createSocket("udp4");
+  await new Promise<void>((r) => s.bind(0, "127.0.0.1", () => r()));
+  const port = s.address().port;
+  await new Promise<void>((r) => s.close(() => r()));
+  return port;
+}
+
+test("only loopback, private and link-local IPv4 count as the LAN", () => {
+  for (const a of ["127.0.0.1", "10.1.2.3", "172.16.0.9", "172.31.255.1", "192.168.1.20", "169.254.3.4", "::ffff:192.168.0.5"]) assert.equal(isLanPeer(a), true, a);
+  for (const a of ["8.8.8.8", "172.32.0.1", "100.64.0.1", "192.169.0.1", "fe80::1", "", undefined, "10.0.0", "10.0.0.256"]) assert.equal(isLanPeer(a), false, String(a));
+});
+
+test("discovery: the paired gaming PC answers the paired laptop, and no one else", async () => {
+  const port = await freeUdpPort();
+  const t = trustPair();
+  const sock = await answerDiscovery({ trust: () => t.pc, port, host: "127.0.0.1" });
+  try {
+    const opts = { port, targets: ["127.0.0.1"], timeoutMs: 500 };
+    assert.equal(await findGamingPc(t.lap, opts), "127.0.0.1");
+    assert.equal(await findGamingPc({ ...t.lap, psk: randomBytes(32) }, opts), null, "another key gets no answer");
+    assert.equal(await findGamingPc({ ...t.lap, id: "someone-else" }, opts), null, "another pairing gets no answer");
+  } finally {
+    sock.close();
+  }
+});
+
+test("peer link: when the gaming PC's address changed, the laptop finds it, connects, and saves the new address", async () => {
+  const port = await freePort();
+  const udp = await freeUdpPort();
+  const t = trustPair();
+  // The laptop still has an old address that nothing answers on.
+  let lapTrust: TrustedPeer = { ...t.lap, address: "127.0.0.2" };
+  const moved: string[] = [];
+  const pc = new PeerLink({
+    machine: "gaming-pc", name: "PC", version: "0", trust: () => t.pc, bind: "127.0.0.1", port,
+    discovery: { port: udp },
+    onLink: () => {}, onRequest: async () => {}, onEvent: () => {},
+  });
+  const lap = new PeerLink({
+    machine: "laptop", name: "LAP", version: "0", trust: () => lapTrust, port,
+    discovery: { port: udp, targets: ["127.0.0.1"] },
+    onMoved: (address) => {
+      moved.push(address);
+      lapTrust = { ...lapTrust, address };
+    },
+    onLink: () => {}, onRequest: async () => {}, onEvent: () => {},
+  });
+  await pc.start();
+  await lap.start();
+  try {
+    await until(() => pc.online && lap.online, 8000);
+    assert.deepEqual(moved, ["127.0.0.1"]);
+    assert.equal(lapTrust.address, "127.0.0.1");
+  } finally {
+    await lap.stop();
+    await pc.stop();
+  }
 });

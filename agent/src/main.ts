@@ -1,7 +1,7 @@
 // LAN KVM Switcher agent (control plane).
 //
 //   node agent/src/main.ts --simulate                     simulated engines, for the dashboard
-//   node agent/src/main.ts --machine gaming-pc [--bind IP] real: Deskflow server + peer link
+//   node agent/src/main.ts --machine gaming-pc [--bind IP] real: Deskflow server + peer link (--bind pins one address; leave it out)
 //   node agent/src/main.ts --machine laptop               real: Deskflow client + peer link
 //
 //   --log-db postgresql://...   also send logs to this database (saved, so pass it once per machine;
@@ -28,6 +28,7 @@ import { DAEMON_PIPE, daemonRequest, daemonRunning } from "./deskflow/daemon.ts"
 import { NullAudio } from "./null-audio.ts";
 import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudio, MIC_SEND_PORT, MIC_TUNNEL_PORT } from "./audio/engine.ts";
 import { helperPath } from "./audio/helper.ts";
+import { lanAddresses } from "./peer/discovery.ts";
 import { LINK_PORT, PeerLink, type PeerRequest } from "./peer/link.ts";
 import { PairingManager } from "./peer/manager.ts";
 import { TrustStore } from "./peer/trust.ts";
@@ -74,15 +75,15 @@ if (values.machine !== "gaming-pc" && values.machine !== "laptop") die("--machin
 const machine = values.machine as Machine;
 if (values.simulate && machine !== "gaming-pc") die("Simulation only covers the gaming PC for now.");
 
-/** First private IPv4 address, for the gaming PC's peer link. */
-function privateIPv4(): string | null {
-  for (const list of Object.values(networkInterfaces())) {
-    for (const a of list ?? []) {
-      if (a.family !== "IPv4" || a.internal) continue;
-      if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a.address)) return a.address;
-    }
-  }
-  return null;
+/**
+ * Gaming PC: where the peer link and pairing listen. Every adapter, so a new DHCP address needs no
+ * restart (only LAN peers are accepted). --bind pins one address, but only while this PC has it.
+ */
+function listenHost(): { host: string; stale: boolean } {
+  const pinned = values.bind;
+  if (!pinned) return { host: "0.0.0.0", stale: false };
+  const mine = Object.values(networkInterfaces()).some((list) => list?.some((a) => a.address === pinned));
+  return mine ? { host: pinned, stale: false } : { host: "0.0.0.0", stale: true };
 }
 
 function idleRoute() {
@@ -225,10 +226,11 @@ async function buildReal(): Promise<Built> {
   const helperAudio = machine === "gaming-pc" && haveHelper ? new HelperAudio(helperExe, { request: (r) => requestPeer(r) }) : null;
   const audio: AudioEngine = helperAudio ?? new NullAudio();
   const devices = await audio.listDevices().catch(() => ({ playback: [], capture: [] }));
-  const lanAddress = machine === "gaming-pc" ? (values.bind ?? privateIPv4()) : null;
-  if (machine === "gaming-pc") {
-    if (!lanAddress || !isLanAddress(lanAddress)) die("No private network address found. Pass --bind with this PC's LAN address.");
-  }
+  if (machine === "gaming-pc" && values.bind && !isLanAddress(values.bind)) die("--bind must be an IPv4 address.");
+  const listen = machine === "gaming-pc" ? listenHost() : null;
+  // The address to show, e.g. for pairing. It may change while the agent runs (see refresh below).
+  const shownAddress = () => (listen && listen.host !== "0.0.0.0" ? listen.host : (lanAddresses()[0] ?? null));
+  const lanAddress = machine === "gaming-pc" ? shownAddress() : null;
 
   const store = new Store({
     agent: { name, machine, version: VERSION, protocol: PROTOCOL_VERSION, simulated: false, engines: { input: "deskflow", audio: audio.kind }, lanAddress },
@@ -291,8 +293,16 @@ async function buildReal(): Promise<Built> {
     name,
     version: VERSION,
     trust: () => trust.load(),
-    bind: lanAddress ?? undefined,
+    bind: listen?.host,
     port: LINK_PORT,
+    // The gaming PC answers on the LAN; the laptop asks when the saved address stops answering.
+    discovery: {},
+    onMoved: (address) => {
+      const peer = trust.load();
+      if (!peer) return;
+      trust.save({ ...peer, address });
+      store.log("info", `Found ${peer.name} at its new address ${address} (it was ${peer.address ?? "unknown"})`);
+    },
     tunnelTargets: machine === "gaming-pc" ? { deskflow: DESKFLOW_SERVER_PORT, audio: AUDIO_PLAY_PORT, mic: MIC_SEND_PORT } : undefined,
     tunnelListeners:
       machine === "laptop"
@@ -416,7 +426,8 @@ async function buildReal(): Promise<Built> {
     name,
     store,
     trust,
-    bind: lanAddress ?? undefined,
+    bind: listen?.host,
+    address: () => store.state.agent.lanAddress,
     onPaired: () => link.reset(),
   });
   const pairing: Pairing = {
@@ -500,6 +511,14 @@ async function buildReal(): Promise<Built> {
     if (machine === "laptop") return void (link.online && laptopAudio?.announceEndpoint());
     // The monitor's input can also change from its own buttons.
     void modeRunner?.refreshMonitor().catch(() => {});
+    // A new DHCP lease: the link already listens on every adapter; only the shown address changes.
+    const address = shownAddress();
+    if (address !== store.state.agent.lanAddress) {
+      store.update((s) => {
+        s.agent.lanAddress = address;
+      });
+      store.log("info", address ? `This PC's network address is now ${address}` : "This PC has no network address right now");
+    }
     if (!haveHelper) return;
     const next = await audio.listDevices().catch(() => null);
     if (next && JSON.stringify(next) !== JSON.stringify(store.state.devices)) {
@@ -510,6 +529,9 @@ async function buildReal(): Promise<Built> {
   }, 15_000);
 
   store.log("info", `Agent started as the ${machine === "gaming-pc" ? "gaming PC" : "laptop"}.`);
+  if (listen?.stale) {
+    store.log("warn", `--bind ${values.bind} is no longer an address of this PC, so the agent listens on all its network adapters. Leave --bind out: npm.cmd run autostart -- install --machine gaming-pc`);
+  }
   // A Deskflow the service still runs from before (an earlier agent, or the Deskflow app's settings) is ended.
   const viaService = paths.servicePipe !== undefined && (await daemonRunning(paths.servicePipe));
   if (viaService) await daemonRequest(paths.servicePipe!, ["stop"]).catch(() => {});
@@ -564,7 +586,7 @@ const link = new URL(dashboard);
 link.hash = new URLSearchParams({ agent: `ws://127.0.0.1:${port}${CONTROL_PATH}`, token }).toString();
 const role = values.simulate ? "simulated" : machine;
 console.log(`LAN KVM agent ${VERSION} (${role}) listening on 127.0.0.1:${port}`);
-if (!values.simulate && machine === "gaming-pc") console.log(`Peer link on ${store.state.agent.lanAddress}:${LINK_PORT} (pairing opens ${store.state.agent.lanAddress}:47822 on request)`);
+if (!values.simulate && machine === "gaming-pc") console.log(`Peer link on port ${LINK_PORT} of every network adapter (this PC is at ${store.state.agent.lanAddress ?? "no address yet"}; pairing opens port 47822 on request)`);
 console.log(`Open the dashboard with this link (the token stays in the URL fragment, never sent to a server):\n\n  ${link}\n`);
 if (!values.simulate) console.log(`Deskflow's output from its last run is saved in ${join(dir, "deskflow")} (deskflow-server.log or deskflow-client.log).\n`);
 if (!values.simulate) console.log(remoteLog.enabled ? "Logs are also sent to the log database.\n" : "Logs stay on this machine (pass --log-db once to also send them to a log database).\n");
