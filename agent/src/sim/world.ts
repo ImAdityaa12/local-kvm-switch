@@ -127,6 +127,7 @@ export class SimInput implements InputEngine {
 
 const FORMATS: Record<RouteId, AudioFormat> = {
   laptopToPc: { sampleRate: 48_000, channels: 2, bitDepth: 32, sample: "f32" },
+  pcToLaptop: { sampleRate: 48_000, channels: 2, bitDepth: 32, sample: "f32" },
   micToLaptop: { sampleRate: 48_000, channels: 1, bitDepth: 24, sample: "s24" },
 };
 
@@ -138,8 +139,8 @@ export class SimAudio implements AudioEngine {
   #faultCb: (r: RouteId, e: AgentError) => void = () => {};
   #meter: ReturnType<typeof setInterval> | null = null;
   #phase = 0;
-  #muted: Record<RouteId, boolean> = { laptopToPc: false, micToLaptop: false };
-  #volume: Record<RouteId, number> = { laptopToPc: 0.8, micToLaptop: 1 };
+  #muted: Record<RouteId, boolean> = { laptopToPc: false, pcToLaptop: false, micToLaptop: false };
+  #volume: Record<RouteId, number> = { laptopToPc: 0.8, pcToLaptop: 1, micToLaptop: 1 };
 
   constructor(world: SimWorld) {
     this.#world = world;

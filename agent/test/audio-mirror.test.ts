@@ -30,6 +30,7 @@ const route = { enabled: true, status: "streaming" as const, deviceId: "dev-1", 
 const mirror: AudioMirror = {
   audio: {
     laptopToPc: { ...route, stats: { bufferMs: 40, underruns: 0, droppedFrames: 0 }, conversion: null },
+    pcToLaptop: { ...route, enabled: false, status: "off", levelDb: null, format: null },
     micToLaptop: { ...route, enabled: false, status: "off", levelDb: null, deviceId: null, format: null, virtualEndpoint: { present: true, name: "CABLE Output", isDefault: true } },
   },
   devices: {
@@ -51,6 +52,9 @@ test("the gaming PC's audio state keeps only known, well-formed fields", () => {
   assert.equal("extra" in loose.audio.laptopToPc, false);
   assert.equal(loose.audio.laptopToPc.error?.message.length, 300);
   assert.deepEqual(loose.audio.micToLaptop.virtualEndpoint, { present: false, isDefault: null });
+  // A gaming PC older than the gaming PC's sound on the laptop sends no such route.
+  assert.equal(loose.audio.pcToLaptop.enabled, false);
+  assert.equal(loose.audio.pcToLaptop.status, "off");
   assert.deepEqual(loose.devices, { playback: [{ id: "a", name: "A", isDefault: false, mix: null }], capture: [] });
 });
 
@@ -107,7 +111,7 @@ test("on the laptop, audio commands go to the gaming PC and leave the local engi
     agent: { name: "lap", machine: "laptop", version: "0", protocol: 1, simulated: true, engines: { input: "simulated", audio: "simulated" }, lanAddress: null },
     peer: { link: "online", name: "PC", pairing: null },
     input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false },
-    audio: { laptopToPc: idle, micToLaptop: { ...idle, virtualEndpoint: { present: true, isDefault: true } } },
+    audio: { laptopToPc: idle, pcToLaptop: idle, micToLaptop: { ...idle, virtualEndpoint: { present: true, isDefault: true } } },
     devices: { playback: [], capture: [] },
     events: [],
   } satisfies AgentState);

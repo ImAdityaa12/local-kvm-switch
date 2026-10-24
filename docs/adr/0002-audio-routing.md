@@ -83,3 +83,21 @@ dashboard shows the same two routes, and sends its audio commands (on/off, devic
 back as `audio.command`. The gaming PC checks each one exactly as it checks its own dashboard's
 commands, then runs it (`agent/src/audio/mirror.ts`). The laptop shows a change only once the
 gaming PC confirms it, and drops the mirrored state as soon as the link goes down.
+
+## Revised 2026-10-24: the gaming PC's sound on the laptop
+
+A third route, `pcToLaptop`, plays what the gaming PC plays on the laptop's own speakers.
+
+- Gaming PC: `kvm-audio send --listen 127.0.0.1:24840 --device <chosen output>`, a loopback of that
+  output at its mix format. Mute is applied here, as for the mic. Tunnel target `pcaudio`.
+- Laptop: `kvm-audio play --connect 127.0.0.1:24841 --device <own speakers>`, volume applied here.
+  The device is the laptop's own output as Reset picks it (the default if it is not a VB-Audio
+  device, else the remembered one, else speakers or headphones), so it is heard in Laptop mode too
+  and the laptop's default output is never changed for it.
+- **Sound goes one way at a time.** With `laptopToPc` also on, the laptop's loopback would record
+  the gaming PC's sound and send it back: an echo, or feedback when the gaming PC records the device
+  it plays the laptop on. Starting either route stops the other first (controller), and the laptop
+  refuses to start one while the other runs (a guard, should the two agents ever disagree). Laptop
+  mode turns `laptopToPc` on, and so turns this route off; Gaming PC mode leaves it as it is.
+- No native change: the helper already looped back any playback device and could listen as sender.
+- An older gaming PC sends no `pcToLaptop`; the laptop shows it off.

@@ -39,6 +39,12 @@ const MAX_OPENS = 32;
 /** Laptop: how often to look for the gaming PC on the LAN while its saved address does not answer. */
 const FIND_EVERY_MS = 10_000;
 
+/** Routes the laptop plays: the gaming PC's mic into the cable, and its sound on the speakers. */
+export type PlayedOnLaptop = "micToLaptop" | "pcToLaptop";
+
+const ROUTES: readonly RouteId[] = ["laptopToPc", "pcToLaptop", "micToLaptop"];
+const isPlayedOnLaptop = (r: unknown): r is PlayedOnLaptop => r === "micToLaptop" || r === "pcToLaptop";
+
 export type PeerRequest =
   | { op: "input.prepare" }
   | { op: "input.release" }
@@ -53,7 +59,8 @@ export type PeerRequest =
   | { op: "display.setTopology"; topology: "extend" | "internal" }
   | { op: "audio.start"; route: RouteId; volume?: number }
   | { op: "audio.stop"; route: RouteId }
-  | { op: "audio.volume"; route: "micToLaptop"; volume: number }
+  /** Gaming PC → laptop: the volume of a route the laptop plays. */
+  | { op: "audio.volume"; route: PlayedOnLaptop; volume: number }
   /** Laptop → gaming PC: an audio command from the laptop's dashboard (audio/mirror.ts). */
   | { op: "audio.command"; command: AudioCommand };
 
@@ -71,10 +78,10 @@ export type PeerEvent =
   | { op: "files.status"; serving: string[] | null }
   /** Laptop → gaming PC: the virtual microphone the laptop can feed. */
   | { op: "audio.endpoint"; present: boolean; name: string | null; isDefault: boolean | null }
-  /** Laptop → gaming PC: health of the mic player on the laptop. */
+  /** Laptop → gaming PC: health of a player on the laptop. */
   | {
       op: "audio.status";
-      route: "micToLaptop";
+      route: PlayedOnLaptop;
       conversion?: { from: AudioFormat; to: AudioFormat } | null;
       stats?: { bufferMs: number; underruns: number; droppedFrames: number };
       error?: AgentError;
@@ -123,11 +130,11 @@ function parseRequest(m: Record<string, unknown>): PeerRequest | null {
   }
   if (body.op === "mode.set" && (body.mode === "laptop" || body.mode === "gaming-pc")) return { op: "mode.set", mode: body.mode };
   if (body.op === "display.setTopology" && (body.topology === "extend" || body.topology === "internal")) return { op: "display.setTopology", topology: body.topology };
-  const route = body.route === "laptopToPc" || body.route === "micToLaptop" ? body.route : null;
+  const route = ROUTES.includes(body.route as RouteId) ? (body.route as RouteId) : null;
   const volume = typeof body.volume === "number" && body.volume >= 0 && body.volume <= 1 ? body.volume : undefined;
   if (body.op === "audio.start" && route) return { op: "audio.start", route, volume };
   if (body.op === "audio.stop" && route) return { op: "audio.stop", route };
-  if (body.op === "audio.volume" && route === "micToLaptop" && volume !== undefined) return { op: "audio.volume", route, volume };
+  if (body.op === "audio.volume" && isPlayedOnLaptop(route) && volume !== undefined) return { op: "audio.volume", route, volume };
   return null;
 }
 
@@ -219,8 +226,8 @@ function parseEvent(m: Record<string, unknown>): PeerEvent | null {
       isDefault: typeof b.isDefault === "boolean" ? b.isDefault : null,
     };
   }
-  if (b?.op === "audio.status" && b.route === "micToLaptop") {
-    const evt: PeerEvent & { op: "audio.status" } = { op: "audio.status", route: "micToLaptop" };
+  if (b?.op === "audio.status" && isPlayedOnLaptop(b.route)) {
+    const evt: PeerEvent & { op: "audio.status" } = { op: "audio.status", route: b.route };
     const c = b.conversion as { from?: unknown; to?: unknown } | null | undefined;
     if (c === null) evt.conversion = null;
     else if (c && isFormat(c.from) && isFormat(c.to)) evt.conversion = { from: c.from, to: c.to };

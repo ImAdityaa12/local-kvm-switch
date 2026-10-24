@@ -97,8 +97,10 @@ export function parseAudioMirror(v: unknown): AudioMirror | null {
   const laptopToPc = route(v.audio.laptopToPc);
   const mic = route(v.audio.micToLaptop);
   if (!laptopToPc || !mic) return null;
+  // A gaming PC older than this route has none: show it off.
+  const pcToLaptop = route(v.audio.pcToLaptop) ?? { enabled: false, status: "off", deviceId: null, format: null, volume: 1, muted: false, levelDb: null };
   return {
-    audio: { laptopToPc, micToLaptop: { ...mic, virtualEndpoint: endpoint((v.audio.micToLaptop as Obj).virtualEndpoint) } },
+    audio: { laptopToPc, pcToLaptop, micToLaptop: { ...mic, virtualEndpoint: endpoint((v.audio.micToLaptop as Obj).virtualEndpoint) } },
     devices: { playback: devices(v.devices.playback), capture: devices(v.devices.capture) },
   };
 }

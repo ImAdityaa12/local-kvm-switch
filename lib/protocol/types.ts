@@ -135,7 +135,12 @@ export interface ModeState {
   error?: AgentError;
 }
 
-export type RouteId = "laptopToPc" | "micToLaptop";
+/**
+ * laptopToPc: what the laptop plays, on a device of the gaming PC. pcToLaptop: what the gaming PC
+ * plays, on the laptop's own speakers. Only one of those two runs at a time, or each machine
+ * would send the other's sound straight back. micToLaptop: the gaming PC's mic as a laptop mic.
+ */
+export type RouteId = "laptopToPc" | "pcToLaptop" | "micToLaptop";
 
 export type RouteStatus = "off" | "starting" | "streaming" | "reconnecting" | "error";
 
@@ -150,7 +155,7 @@ export interface RouteState {
   /** Requested by the user; the stream may still be starting or failing. */
   enabled: boolean;
   status: RouteStatus;
-  /** Device on the gaming PC: playback for laptopToPc, capture for micToLaptop. */
+  /** Device on the gaming PC: playback for laptopToPc and pcToLaptop (the one it records), capture for micToLaptop. */
   deviceId: string | null;
   format: AudioFormat | null;
   volume: number;
@@ -238,6 +243,7 @@ export interface AgentState {
   input: InputState;
   audio: {
     laptopToPc: RouteState;
+    pcToLaptop: RouteState;
     micToLaptop: RouteState & { virtualEndpoint: VirtualEndpointState };
   };
   devices: { playback: AudioDevice[]; capture: AudioDevice[] };

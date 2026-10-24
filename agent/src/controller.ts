@@ -68,8 +68,17 @@ export interface ControllerDeps {
 
 const ROUTE_LABEL: Record<RouteId, string> = {
   laptopToPc: "Laptop audio",
+  pcToLaptop: "Gaming PC audio on the laptop",
   micToLaptop: "Microphone",
 };
+
+const ROUTES: readonly RouteId[] = ["laptopToPc", "pcToLaptop", "micToLaptop"];
+
+/**
+ * Sound goes one way at a time: with both on, the laptop would record the gaming PC's sound it
+ * plays and send it back (an echo, or feedback). Starting one turns the other off.
+ */
+const OPPOSITE: Partial<Record<RouteId, RouteId>> = { laptopToPc: "pcToLaptop", pcToLaptop: "laptopToPc" };
 
 function asAgentError(e: unknown): AgentError {
   if (e instanceof EngineError) return e.detail;
@@ -188,7 +197,7 @@ export class Controller {
       case "audio.setEnabled":
         return cmd.enabled ? this.#startRoute(cmd.route) : this.#stopRoute(cmd.route, "Turned off");
       case "audio.setDevice": {
-        const list = cmd.route === "laptopToPc" ? store.state.devices.playback : store.state.devices.capture;
+        const list = cmd.route === "micToLaptop" ? store.state.devices.capture : store.state.devices.playback;
         const device = list.find((d) => d.id === cmd.deviceId);
         if (!device) throw new EngineError({ code: "device-missing", message: "That device is no longer present." });
         const wasOn = store.state.audio[cmd.route].enabled;
@@ -236,7 +245,7 @@ export class Controller {
         return this.#d.pairing.cancel();
       case "peer.forget":
         await this.#serialSwitch("gaming-pc");
-        await Promise.all([this.#stopRoute("laptopToPc", "Peer removed"), this.#stopRoute("micToLaptop", "Peer removed")]);
+        await Promise.all(ROUTES.map((r) => this.#stopRoute(r, "Peer removed")));
         await this.#d.pairing.forget();
         store.update((s) => {
           s.peer = { link: "unpaired", pairing: null };
@@ -431,7 +440,7 @@ export class Controller {
     if (online && prev !== "online") {
       store.log("info", `${who} is reachable`);
       // Do not wait out the backoff: retry waiting routes now.
-      for (const route of ["laptopToPc", "micToLaptop"] as const) {
+      for (const route of ROUTES) {
         const r = store.state.audio[route];
         if (r.enabled && r.status === "reconnecting") {
           this.#startRoute(route, r.retry?.attempt ?? 1).catch(() => {});
@@ -465,6 +474,10 @@ export class Controller {
         d.audio[route].error = error;
       });
       throw new EngineError(error);
+    }
+    const opposite = OPPOSITE[route];
+    if (opposite && s.audio[opposite].enabled) {
+      await this.#stopRoute(opposite, `${ROUTE_LABEL[route]} turned on; sound goes one way at a time`);
     }
     store.update((d) => {
       d.audio[route].enabled = true;
@@ -516,7 +529,7 @@ export class Controller {
       d.audio[route].conversion = null;
       d.audio[route].error = undefined;
     });
-    store.log("info", `${ROUTE_LABEL[route]} stopped (${reason.toLowerCase()})`);
+    store.log("info", `${ROUTE_LABEL[route]} stopped (${reason[0].toLowerCase()}${reason.slice(1)})`);
   }
 
   #onRouteFault(route: RouteId, error: AgentError): void {
@@ -574,8 +587,8 @@ export class Controller {
 
   /** Release everything before the process exits. */
   async shutdown(): Promise<void> {
-    for (const r of ["laptopToPc", "micToLaptop"] as const) this.#cancelRetry(r);
-    await Promise.allSettled([this.#d.audio.stop("laptopToPc"), this.#d.audio.stop("micToLaptop")]);
+    for (const r of ROUTES) this.#cancelRetry(r);
+    await Promise.allSettled(ROUTES.map((r) => this.#d.audio.stop(r)));
     await this.#d.input.deactivate();
   }
 }

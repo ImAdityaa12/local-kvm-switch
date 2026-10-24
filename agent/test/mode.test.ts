@@ -38,6 +38,7 @@ async function setup(o: Opts = {}) {
     input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false, ...(o.edge ? { edgeSwitch: true } : {}) },
     audio: {
       laptopToPc: { ...route, deviceId: devices.playback[0].id },
+      pcToLaptop: { ...route, deviceId: devices.playback[0].id },
       micToLaptop: { ...route, deviceId: devices.capture[0].id, virtualEndpoint: await audio.virtualEndpoint() },
     },
     devices,
@@ -272,4 +273,17 @@ test("mode: with edge switching, Deskflow at the edges is part of Gaming PC mode
   await t.controller.handle({ type: "mode.set", mode: "gaming-pc" });
   assert.equal(t.store.state.input.target, "gaming-pc");
   await until(() => t.store.state.input.clientConnected && t.store.state.input.engine === "running", "waiting at the edges again");
+});
+
+test("Laptop mode moves sound to the IEM, turning off the gaming PC's sound on the laptop; Gaming PC mode leaves it alone", async () => {
+  const { store, runner, controller } = await setup();
+  await controller.handle({ type: "audio.setEnabled", route: "pcToLaptop", enabled: true });
+  await runner.set("laptop");
+  assert.equal(store.state.audio.laptopToPc.status, "streaming");
+  assert.equal(store.state.audio.pcToLaptop.enabled, false);
+
+  await runner.set("gaming-pc");
+  await controller.handle({ type: "audio.setEnabled", route: "pcToLaptop", enabled: true });
+  await runner.set("gaming-pc");
+  assert.equal(store.state.audio.pcToLaptop.status, "streaming");
 });

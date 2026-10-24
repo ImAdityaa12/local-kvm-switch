@@ -26,7 +26,7 @@ import { ModeRunner, idleMode } from "./mode.ts";
 import { preflight } from "./deskflow/preflight.ts";
 import { DAEMON_PIPE, daemonRequest, daemonRunning } from "./deskflow/daemon.ts";
 import { NullAudio } from "./null-audio.ts";
-import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudio, MIC_SEND_PORT, MIC_TUNNEL_PORT } from "./audio/engine.ts";
+import { AUDIO_PLAY_PORT, AUDIO_TUNNEL_PORT, HelperAudio, LaptopAudio, MIC_SEND_PORT, MIC_TUNNEL_PORT, PC_AUDIO_SEND_PORT, PC_AUDIO_TUNNEL_PORT } from "./audio/engine.ts";
 import { helperPath } from "./audio/helper.ts";
 import { MIRROR_EVERY_MS, type AudioCommand } from "./audio/mirror.ts";
 import { CLIPBOARD_TARGET, ClipboardShare, clipHelperPath } from "./sharing/clipboard.ts";
@@ -167,6 +167,7 @@ async function buildSimulated(): Promise<Built> {
     input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false, edgeSwitch: false, hotkeys: input.hotkeys },
     audio: {
       laptopToPc: { ...idleRoute(), volume: 0.8, deviceId: devices.playback.find((d) => d.isDefault)?.id ?? null },
+      pcToLaptop: { ...idleRoute(), deviceId: devices.playback.find((d) => d.isDefault)?.id ?? null },
       micToLaptop: { ...idleRoute(), deviceId: devices.capture.find((d) => d.isDefault)?.id ?? null, virtualEndpoint: await audio.virtualEndpoint() },
     },
     devices,
@@ -271,6 +272,8 @@ async function buildReal(): Promise<Built> {
     },
     audio: {
       laptopToPc: { ...idleRoute(), volume: 0.8, deviceId: devices.playback.find((d) => d.isDefault)?.id ?? null },
+      // The output this PC records for the laptop: its default, normally the IEM.
+      pcToLaptop: { ...idleRoute(), deviceId: devices.playback.find((d) => d.isDefault)?.id ?? null },
       micToLaptop: { ...idleRoute(), deviceId: devices.capture.find((d) => d.isDefault)?.id ?? null, virtualEndpoint: await audio.virtualEndpoint() },
     },
     devices,
@@ -380,7 +383,7 @@ async function buildReal(): Promise<Built> {
       store.log("info", `Found ${peer.name} at its new address ${address} (it was ${peer.address ?? "unknown"})`);
     },
     tunnelTargets: {
-      ...(machine === "gaming-pc" ? { deskflow: DESKFLOW_SERVER_PORT, audio: AUDIO_PLAY_PORT, mic: MIC_SEND_PORT } : {}),
+      ...(machine === "gaming-pc" ? { deskflow: DESKFLOW_SERVER_PORT, audio: AUDIO_PLAY_PORT, mic: MIC_SEND_PORT, pcaudio: PC_AUDIO_SEND_PORT } : {}),
       [FILES_TARGET]: FILES_SERVE_PORT,
       [CLIPBOARD_TARGET]: clipboard.receive,
     },
@@ -390,6 +393,7 @@ async function buildReal(): Promise<Built> {
             { name: "deskflow", localPort: DESKFLOW_TUNNEL_PORT },
             { name: "audio", localPort: AUDIO_TUNNEL_PORT },
             { name: "mic", localPort: MIC_TUNNEL_PORT },
+            { name: "pcaudio", localPort: PC_AUDIO_TUNNEL_PORT },
           ]
         : []),
       { name: FILES_TARGET, localPort: FILES_TUNNEL_PORT },
@@ -406,7 +410,7 @@ async function buildReal(): Promise<Built> {
       // The laptop shows the gaming PC's audio only while it can hear from it.
       if (!online && machine === "laptop" && store.state.audioFrom) {
         store.update((s) => {
-          s.audio = { laptopToPc: idleRoute(), micToLaptop: { ...idleRoute(), virtualEndpoint: s.audio.micToLaptop.virtualEndpoint } };
+          s.audio = { laptopToPc: idleRoute(), pcToLaptop: idleRoute(), micToLaptop: { ...idleRoute(), virtualEndpoint: s.audio.micToLaptop.virtualEndpoint } };
           s.devices = { playback: [], capture: [] };
           delete s.audioFrom;
         });
@@ -453,7 +457,7 @@ async function buildReal(): Promise<Built> {
       if (machine !== "laptop") throw new EngineError({ code: "not-supported", message: "Only the laptop takes these requests." });
       if (req.op === "audio.start" || req.op === "audio.stop" || req.op === "audio.volume") {
         if (!laptopAudio) throw new EngineError({ code: "engine-missing", message: "The audio helper is not built on the laptop.", hint: "Run npm run build:audio on the laptop." });
-        if (req.op === "audio.volume") return laptopAudio.setMicVolume(req.volume);
+        if (req.op === "audio.volume") return laptopAudio.setVolume(req.route, req.volume);
         return req.op === "audio.start" ? laptopAudio.start(req.route, req.volume) : laptopAudio.stop(req.route);
       }
       if (req.op === "input.prepare") {
@@ -679,6 +683,7 @@ async function buildReal(): Promise<Built> {
       await filesShare.dispose();
       await laptopAudio?.stop("laptopToPc");
       await laptopAudio?.stop("micToLaptop");
+      await laptopAudio?.stop("pcToLaptop");
       await link.stop();
     },
   };
@@ -756,6 +761,12 @@ const tray = values["no-tray"]
         if (action === "edge") {
           const enabled = !store.state.input.edgeSwitch;
           controller.handle({ type: "input.setEdgeSwitch", enabled }).catch((e) => store.log("warn", `Could not turn ${enabled ? "on" : "off"} switching at the screen edges: ${e instanceof EngineError ? e.detail.message : String(e)}`));
+          return;
+        }
+        if (action === "pcAudio") {
+          // Turning it on turns laptop audio to the gaming PC off (sound goes one way at a time).
+          const enabled = !store.state.audio.pcToLaptop.enabled;
+          controller.handle({ type: "audio.setEnabled", route: "pcToLaptop", enabled }).catch((e) => store.log("warn", `Could not turn ${enabled ? "on" : "off"} the gaming PC's sound on the laptop: ${e instanceof EngineError ? e.detail.message : String(e)}`));
           return;
         }
         if (action === "resetAudio") {

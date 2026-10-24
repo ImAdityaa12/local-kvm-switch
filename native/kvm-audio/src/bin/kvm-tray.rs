@@ -1,8 +1,9 @@
 // LAN KVM tray icon. The agent starts this and owns it:
 //   agent -> tray (stdin, one JSON object per line):
-//     {"icon":"local"|"remote"|"busy"|"problem","status":"...","canSwitch":bool,"canReturn":bool,"switchLabel":"...","resetAudio":bool,"edgeSwitch":bool|null}
+//     {"icon":"local"|"remote"|"busy"|"problem","status":"...","canSwitch":bool,"canReturn":bool,"switchLabel":"...","resetAudio":bool,"edgeSwitch":bool|null,
+//      "pcAudio":bool|null,"pcAudioLabel":"..."}
 //   tray -> agent (stdout, one JSON object per line):
-//     {"action":"switch"} | {"action":"return"} | {"action":"dashboard"} | {"action":"resetAudio"} | {"action":"edge"}
+//     {"action":"switch"} | {"action":"return"} | {"action":"dashboard"} | {"action":"resetAudio"} | {"action":"edge"} | {"action":"pcAudio"}
 //     {"event":"icon","ok":bool}   whether Windows accepted the icon
 // When stdin closes (the agent stopped) the icon is removed and the tray exits.
 
@@ -35,6 +36,7 @@ const ID_RETURN: usize = 3;
 const ID_DASHBOARD: usize = 4;
 const ID_RESET_AUDIO: usize = 5;
 const ID_EDGE: usize = 6;
+const ID_PC_AUDIO: usize = 7;
 
 #[derive(Clone)]
 struct State {
@@ -47,6 +49,9 @@ struct State {
     reset_audio: bool,
     /// "Switch at screen edges", ticked when on; None hides it.
     edge_switch: Option<bool>,
+    /// The gaming PC's sound on the laptop, ticked when on; None hides it.
+    pc_audio: Option<bool>,
+    pc_audio_label: String,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -166,6 +171,11 @@ fn show_menu(hwnd: HWND) {
             let flags = if on { MF_STRING | MF_CHECKED } else { MF_STRING };
             let _ = AppendMenuW(menu, flags, ID_EDGE, w!("Switch at screen edges"));
         }
+        let pc_audio_label = wide(&state.pc_audio_label);
+        if let Some(on) = state.pc_audio.filter(|_| !state.pc_audio_label.is_empty()) {
+            let flags = if on { MF_STRING | MF_CHECKED } else { MF_STRING };
+            let _ = AppendMenuW(menu, flags, ID_PC_AUDIO, PCWSTR(pc_audio_label.as_ptr()));
+        }
         if state.reset_audio {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, ID_RESET_AUDIO, w!("Reset mic and speaker"));
@@ -185,6 +195,7 @@ fn show_menu(hwnd: HWND) {
             ID_DASHBOARD => send("dashboard"),
             ID_RESET_AUDIO => send("resetAudio"),
             ID_EDGE => send("edge"),
+            ID_PC_AUDIO => send("pcAudio"),
             _ => {}
         }
     }
@@ -239,6 +250,8 @@ fn parse(line: &str) -> Option<State> {
         can_return: v.get("canReturn").and_then(|x| x.as_bool()).unwrap_or(false),
         reset_audio: v.get("resetAudio").and_then(|x| x.as_bool()).unwrap_or(false),
         edge_switch: v.get("edgeSwitch").and_then(|x| x.as_bool()),
+        pc_audio: v.get("pcAudio").and_then(|x| x.as_bool()),
+        pc_audio_label: text("pcAudioLabel"),
     })
 }
 
