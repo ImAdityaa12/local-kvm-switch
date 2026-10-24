@@ -11,8 +11,8 @@
 //   Apps on the laptop record from "CABLE Output".
 //
 // Gaming PC audio → laptop (never with laptop audio → gaming PC: each would send the other's sound back)
-//   gaming PC: kvm-audio send  --listen  127.0.0.1:24840  --device <chosen output>  (loopback capture, mute applied here)
-//   laptop:    kvm-audio play  --connect 127.0.0.1:24841  --device <the laptop's own speakers>  ──tunnel "pcaudio"──►
+//   gaming PC: kvm-audio send  --listen  127.0.0.1:24850  --device <chosen output>  (loopback capture, mute applied here)
+//   laptop:    kvm-audio play  --connect 127.0.0.1:24851  --device <the laptop's own speakers>  ──tunnel "pcaudio"──►
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -30,9 +30,9 @@ export const MIC_SEND_PORT = 24830;
 /** Loopback port on the laptop that tunnels to MIC_SEND_PORT. */
 export const MIC_TUNNEL_PORT = 24831;
 /** Loopback port of the gaming PC's own sound, looped back for the laptop (tunnel target "pcaudio"). */
-export const PC_AUDIO_SEND_PORT = 24840;
+export const PC_AUDIO_SEND_PORT = 24850;
 /** Loopback port on the laptop that tunnels to PC_AUDIO_SEND_PORT. */
-export const PC_AUDIO_TUNNEL_PORT = 24841;
+export const PC_AUDIO_TUNNEL_PORT = 24851;
 
 const START_TIMEOUT_MS = 8_000;
 const VB_PLAYBACK = /^CABLE Input\b/i;

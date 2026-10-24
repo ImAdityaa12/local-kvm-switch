@@ -88,9 +88,9 @@ gaming PC confirms it, and drops the mirrored state as soon as the link goes dow
 
 A third route, `pcToLaptop`, plays what the gaming PC plays on the laptop's own speakers.
 
-- Gaming PC: `kvm-audio send --listen 127.0.0.1:24840 --device <chosen output>`, a loopback of that
+- Gaming PC: `kvm-audio send --listen 127.0.0.1:24850 --device <chosen output>`, a loopback of that
   output at its mix format. Mute is applied here, as for the mic. Tunnel target `pcaudio`.
-- Laptop: `kvm-audio play --connect 127.0.0.1:24841 --device <own speakers>`, volume applied here.
+- Laptop: `kvm-audio play --connect 127.0.0.1:24851 --device <own speakers>`, volume applied here.
   The device is the laptop's own output as Reset picks it (the default if it is not a VB-Audio
   device, else the remembered one, else speakers or headphones), so it is heard in Laptop mode too
   and the laptop's default output is never changed for it.
