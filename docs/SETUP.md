@@ -261,6 +261,23 @@ a quick move to the left edge sends the keyboard and mouse to the laptop.
 2. Turn the switch on. It shows **Streaming** once sound arrives.
 3. Play something on the laptop.
 
+### Gaming PC sound on the laptop
+
+The other way round: hear the gaming PC (a game, Discord, music) on the laptop's own speakers or
+headphones. Nothing needs installing; it uses the same audio helper.
+
+1. **Gaming PC audio to Laptop → Send the sound of**: choose the gaming PC output whose sound you
+   want (normally its Windows default, the one apps play on). That output keeps playing on the
+   gaming PC too.
+2. Turn the switch on, from either dashboard, or tick **Hear the gaming PC on this laptop** in the
+   laptop's tray menu (**Play this PC's sound on the laptop** on the gaming PC's).
+3. **Volume** sets how loud it is on the laptop; **Mute** silences it before it leaves the gaming PC.
+
+Sound goes one way at a time: turning this on turns off **Laptop audio to Gaming PC**, and turning
+that on (or switching to Laptop mode) turns this off. Otherwise the laptop would record the gaming
+PC's sound and send it straight back. The laptop always plays it on its own speakers or headphones,
+never on Voicemeeter or a CABLE device, and leaves its Windows output as it is.
+
 ### IEM microphone on the laptop
 
 1. **Gaming PC microphone to Laptop → Microphone on this PC**: choose your IEM's microphone.

@@ -9,7 +9,7 @@ function state(patch: (s: AgentState) => void = () => {}): AgentState {
     agent: { name: "t", machine: "gaming-pc", version: "0", protocol: 1, simulated: false, engines: { input: "deskflow", audio: "wasapi" }, lanAddress: null },
     peer: { link: "online", name: "L", pairing: null },
     input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false, hotkeys: { toLaptop: "Ctrl+Alt+Left", toGamingPc: "Ctrl+Alt+Right" } },
-    audio: { laptopToPc: { ...route }, micToLaptop: { ...route, virtualEndpoint: { present: true, isDefault: false } } },
+    audio: { laptopToPc: { ...route }, pcToLaptop: { ...route }, micToLaptop: { ...route, virtualEndpoint: { present: true, isDefault: false } } },
     devices: { playback: [], capture: [] },
     events: [],
   };
@@ -82,4 +82,26 @@ test("tray: over the screen edge, Laptop mode is still offered; in Laptop mode i
   assert.equal(over.canSwitch, true);
   const inMode = trayView(state((s) => ((s.mode = { ...mode, current: "laptop" }), Object.assign(s.input, { target: "laptop", engine: "running", hooksActive: true }))));
   assert.equal(inMode.canSwitch, false);
+});
+
+test("tray: the gaming PC's sound on the laptop is a ticked item on both machines, hidden while the other is away", () => {
+  const pc = trayView(state((s) => (s.agent.engines.audio = "wasapi")));
+  assert.equal(pc.pcAudio, false);
+  assert.equal(pc.pcAudioLabel, "Play this PC's sound on the laptop");
+  assert.equal(trayView(state((s) => ((s.agent.engines.audio = "wasapi"), (s.audio.pcToLaptop.enabled = true)))).pcAudio, true);
+  assert.equal(trayView(state((s) => (s.agent.engines.audio = "none"))).pcAudio, null, "no audio helper");
+  assert.equal(trayView(state((s) => ((s.agent.engines.audio = "wasapi"), (s.peer.link = "offline")))).pcAudio, null);
+
+  const laptop = (patch: (s: AgentState) => void = () => {}) =>
+    trayView(
+      state((s) => {
+        s.agent.machine = "laptop";
+        patch(s);
+      }),
+    );
+  // The laptop knows the route only while it mirrors the gaming PC's audio.
+  assert.equal(laptop().pcAudio, null);
+  const on = laptop((s) => ((s.audioFrom = "gaming-pc"), (s.audio.pcToLaptop.enabled = true)));
+  assert.equal(on.pcAudio, true);
+  assert.equal(on.pcAudioLabel, "Hear the gaming PC on this laptop");
 });

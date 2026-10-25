@@ -1,7 +1,8 @@
 # LAN KVM Switcher
 
 One keyboard, mouse and IEM on the gaming PC; choose whether they work on the gaming PC or on a laptop
-over the local network, and route audio both ways. Spec: [`docs/spec.md`](docs/spec.md).
+over the local network, and route audio both ways (laptop sound to the IEM, or the gaming PC's sound to
+the laptop's speakers). Spec: [`docs/spec.md`](docs/spec.md).
 
 **To set it up on your gaming PC and laptop, follow [`docs/SETUP.md`](docs/SETUP.md).**
 

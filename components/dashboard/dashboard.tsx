@@ -226,7 +226,7 @@ function LaptopAudio({ state, send }: { state: AgentState; send: (c: Command) =>
       </h2>
       <div>
         <p className="max-w-[60ch] text-lg text-ink-2">
-          When the gaming PC turns on its laptop audio route, this laptop sends everything it plays, unchanged. When it turns on the microphone route, your IEM mic plays into CABLE Input and apps here record it from CABLE Output. The gaming PC runs both; they can be controlled here too while it is reachable.
+          When the gaming PC turns on its laptop audio route, this laptop sends everything it plays, unchanged. When it turns on its own audio route instead, this laptop plays everything the gaming PC plays on its own speakers or headphones. When it turns on the microphone route, your IEM mic plays into CABLE Input and apps here record it from CABLE Output. The gaming PC runs the routes; they can be controlled here too while it is reachable.
         </p>
         <ResetAudio state={state} send={send} className="mt-4" />
       </div>

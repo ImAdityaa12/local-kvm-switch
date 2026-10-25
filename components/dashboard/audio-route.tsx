@@ -20,8 +20,9 @@ const STATUS_TONE: Record<RouteState["status"], Tone> = {
 };
 
 /**
- * Both audio routes. The gaming PC owns them; on the laptop (state.audioFrom) they mirror the gaming
- * PC's, and every change here is sent to it and shows once it confirms.
+ * The audio routes. The gaming PC owns them; on the laptop (state.audioFrom) they mirror the gaming
+ * PC's, and every change here is sent to it and shows once it confirms. Laptop audio and the gaming
+ * PC's audio on the laptop switch each other off: sound goes one way at a time.
  */
 export function AudioSection({ state, send, now, children }: { state: AgentState; send: Send; now: number; children?: React.ReactNode }) {
   const onLaptop = state.agent.machine === "laptop";
@@ -31,14 +32,14 @@ export function AudioSection({ state, send, now, children }: { state: AgentState
     <section aria-labelledby="audio-heading" className="mt-28 md:mt-40">
       <div className="rise max-w-[60ch]" style={{ "--i": 0 } as React.CSSProperties}>
         <h2 id="audio-heading" className="text-title leading-tight font-semibold tracking-[-0.03em]">
-          Audio stays on your IEM
+          Sound goes where you are
         </h2>
         <p className="mt-3 text-lg text-ink-2">
-          Each direction runs on its own and never touches the keyboard and mouse path. A route shows Streaming only once the agent hears audio arriving.
-          {onLaptop ? ` ${peerName} runs both routes; changes here go to it.` : ""}
+          Hear the laptop on your IEM, or the gaming PC on the laptop: turning one on turns the other off, so neither machine sends the other&apos;s sound back. Routes never touch the keyboard and mouse path, and show Streaming only once the agent hears audio arriving.
+          {onLaptop ? ` ${peerName} runs the routes; changes here go to it.` : ""}
         </p>
       </div>
-      <div className="mt-10 grid grid-cols-[minmax(0,1fr)] gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="mt-10 grid grid-cols-[minmax(0,1fr)] gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
         <Route
           id="laptopToPc"
           index={1}
@@ -52,10 +53,30 @@ export function AudioSection({ state, send, now, children }: { state: AgentState
           send={send}
           now={now}
           path={onLaptop ? "This laptop's loopback capture, network, the gaming PC" : "Laptop loopback capture, network, this PC"}
+          stops={state.audio.pcToLaptop.enabled ? "Gaming PC audio to Laptop" : undefined}
+        />
+        <Route
+          id="pcToLaptop"
+          index={2}
+          title="Gaming PC audio to Laptop"
+          summary={
+            onLaptop
+              ? `Plays everything ${peerName} plays on this laptop's own speakers or headphones.`
+              : `Plays everything this PC plays on ${peerName}'s own speakers or headphones.`
+          }
+          route={state.audio.pcToLaptop}
+          devices={state.devices.playback}
+          deviceLabel={onLaptop ? "Send the sound of (gaming PC)" : "Send the sound of"}
+          levelLabel={onLaptop ? "Volume on this laptop" : "Volume on the laptop"}
+          simulated={state.agent.simulated}
+          send={send}
+          now={now}
+          path={onLaptop ? "The gaming PC's loopback capture, network, this laptop's speakers" : "This PC's loopback capture, network, the laptop's speakers"}
+          stops={state.audio.laptopToPc.enabled ? "Laptop audio to Gaming PC" : undefined}
         />
         <Route
           id="micToLaptop"
-          index={2}
+          index={3}
           title="Gaming PC microphone to Laptop"
           summary={onLaptop ? `Your IEM microphone appears on this laptop as ${mic}. Pick it in Discord.` : `Your IEM microphone appears on ${peerName} as ${mic}. Pick it in Discord.`}
           route={state.audio.micToLaptop}
@@ -66,6 +87,7 @@ export function AudioSection({ state, send, now, children }: { state: AgentState
           send={send}
           now={now}
           endpoint={state.audio.micToLaptop.virtualEndpoint}
+          className="lg:col-span-2 xl:col-span-1"
         />
       </div>
       {children}
@@ -87,6 +109,8 @@ function Route({
   now,
   endpoint,
   path,
+  stops,
+  className,
 }: {
   id: RouteId;
   index: number;
@@ -101,6 +125,9 @@ function Route({
   now: number;
   endpoint?: VirtualEndpointState;
   path?: string;
+  /** The route that turning this one on turns off, while it is on. */
+  stops?: string;
+  className?: string;
 }) {
   // While dragging, show the local value; otherwise show what the agent reports.
   const [draft, setDraft] = useState<number | null>(null);
@@ -114,7 +141,7 @@ function Route({
   return (
     <article
       aria-labelledby={`${id}-title`}
-      className={cn("rise flex min-w-0 flex-col p-6 sm:p-8", route.status === "streaming" ? "bg-surface-2" : "bg-surface-1")}
+      className={cn("rise flex min-w-0 flex-col p-6 sm:p-8", route.status === "streaming" ? "bg-surface-2" : "bg-surface-1", className)}
       style={{ "--i": index } as React.CSSProperties}
     >
       <div className="flex items-start justify-between gap-6">
@@ -123,6 +150,7 @@ function Route({
             {title}
           </h3>
           <p className="mt-2 text-ink-2">{summary}</p>
+          {stops && !route.enabled ? <p className="mt-2 text-warn">Turning it on turns off {stops}.</p> : null}
         </div>
         <div className="flex shrink-0 items-center gap-3 pt-1">
           <label htmlFor={switchId} className="sr-only">

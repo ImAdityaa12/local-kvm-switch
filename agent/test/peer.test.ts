@@ -37,7 +37,7 @@ function blankState(machine: Machine): AgentState {
     agent: { name: machine, machine, version: "0", protocol: 1, simulated: false, engines: { input: "none", audio: "none" }, lanAddress: null },
     peer: { link: "unpaired", pairing: null },
     input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false },
-    audio: { laptopToPc: route, micToLaptop: { ...route, virtualEndpoint: { present: false, isDefault: null } } },
+    audio: { laptopToPc: route, pcToLaptop: route, micToLaptop: { ...route, virtualEndpoint: { present: false, isDefault: null } } },
     devices: { playback: [], capture: [] },
     events: [],
   };

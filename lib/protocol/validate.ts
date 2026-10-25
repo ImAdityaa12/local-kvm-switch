@@ -5,7 +5,7 @@ import { MAX_CLIENT_MESSAGE_BYTES, type ClientMessage, type Command, type Machin
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 
-const ROUTES: readonly RouteId[] = ["laptopToPc", "micToLaptop"];
+const ROUTES: readonly RouteId[] = ["laptopToPc", "pcToLaptop", "micToLaptop"];
 const MACHINES: readonly Machine[] = ["gaming-pc", "laptop"];
 
 function isObject(v: unknown): v is Record<string, unknown> {

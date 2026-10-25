@@ -11,7 +11,7 @@ export function trayPath(repoRoot: string): string {
   return join(repoRoot, "native", "kvm-audio", "target", "release", "kvm-tray.exe");
 }
 
-export type TrayAction = "switch" | "return" | "dashboard" | "resetAudio" | "edge";
+export type TrayAction = "switch" | "return" | "dashboard" | "resetAudio" | "edge" | "pcAudio";
 
 export interface TrayView {
   icon: "local" | "remote" | "busy" | "problem";
@@ -23,6 +23,9 @@ export interface TrayView {
   resetAudio: boolean;
   /** "Switch at screen edges", ticked when on; null hides it (not known yet). */
   edgeSwitch: boolean | null;
+  /** The gaming PC's sound on the laptop, ticked when on; null hides it (no audio, or the other machine is away). */
+  pcAudio: boolean | null;
+  pcAudioLabel: string;
 }
 
 /** What the icon shows. Grey: gaming PC has input; green: laptop; amber: switching; red: the other machine is unreachable. */
@@ -44,6 +47,9 @@ export function trayView(s: AgentState): TrayView {
     canSwitch: peerOnline && !laptopMode && pending === null,
     resetAudio: !onGamingPc,
     edgeSwitch: s.input.edgeSwitch ?? null,
+    // The gaming PC runs the route; the laptop can turn it on while it mirrors the gaming PC's audio.
+    pcAudio: peerOnline && (onGamingPc ? s.agent.engines.audio !== "none" : s.audioFrom === "gaming-pc") ? s.audio.pcToLaptop.enabled : null,
+    pcAudioLabel: onGamingPc ? "Play this PC's sound on the laptop" : "Hear the gaming PC on this laptop",
   };
   if (pending === "laptop") {
     // Only when pressing it for the user did not work.
@@ -84,7 +90,7 @@ export class Tray {
         } catch {
           continue;
         }
-        if (m.action === "switch" || m.action === "return" || m.action === "dashboard" || m.action === "resetAudio" || m.action === "edge") onAction(m.action);
+        if (m.action === "switch" || m.action === "return" || m.action === "dashboard" || m.action === "resetAudio" || m.action === "edge" || m.action === "pcAudio") onAction(m.action);
         else if (m.event === "icon" && m.ok === false) onProblem("Windows did not accept the tray icon");
       }
     });

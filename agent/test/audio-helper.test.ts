@@ -136,6 +136,30 @@ test("reverse direction: sender listens, player dials (the mic route's shape)", 
   assert.ok(Math.abs(20 * Math.log10(peak) + 12) < 0.05);
 });
 
+test("the gaming PC's sound for the laptop: loopback of a chosen output listens, the player dials", { skip }, async () => {
+  const p = port++;
+  const wav = join(dir, "pc-audio.wav");
+  const out = (await HelperProcess.list(exe)).playback.find((d) => d.isDefault);
+  assert.ok(out, "a default playback device");
+  const send = HelperProcess.spawn(exe, ["send", "--listen", `127.0.0.1:${p}`, "--device", out.id]);
+  await waitFor(send, "listening");
+  const streaming = waitFor(send, "streaming");
+  const play = HelperProcess.spawn(exe, ["play", "--connect", `127.0.0.1:${p}`, "--wav", wav, "--seconds", "0.5"]);
+  const started = await streaming;
+  assert.equal(started.source, "loopback");
+  assert.equal(started.device, out.name);
+  // Silence on the output is filled in, so the player still gets its half second.
+  const done = await waitFor(play, "wav", 6000);
+  send.stop();
+  await Promise.all([play.exited, send.exited]);
+  assert.ok((done.frames as number) > 0);
+  if (out.mix) {
+    const d = readFileSync(wav);
+    assert.equal(d.readUInt32LE(24), out.mix.sampleRate, "the output's own rate, unconverted");
+    assert.equal(d.readUInt16LE(22), out.mix.channels);
+  }
+});
+
 test("mute is applied at the sender: nothing audible leaves the machine", { skip }, async () => {
   const p = port++;
   const wav = join(dir, "muted.wav");

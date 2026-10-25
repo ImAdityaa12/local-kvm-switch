@@ -40,7 +40,9 @@ export function idleMode(): ModeState {
 
 const LAPTOP_STEPS: ModeStepId[] = ["laptop-display", "monitor", "input", "laptop-audio", "microphone"];
 const GAMING_STEPS: ModeStepId[] = ["input", "laptop-audio", "microphone", "monitor", "laptop-display"];
-const ROUTE_STEP: Record<RouteId, ModeStepId> = { laptopToPc: "laptop-audio", micToLaptop: "microphone" };
+/** The routes a mode switch turns on and off. The gaming PC's sound on the laptop is the user's own choice. */
+type ModeRoute = Exclude<RouteId, "pcToLaptop">;
+const ROUTE_STEP: Record<ModeRoute, ModeStepId> = { laptopToPc: "laptop-audio", micToLaptop: "microphone" };
 
 function message(e: unknown): string {
   return e instanceof EngineError ? e.detail.message : e instanceof Error ? e.message : String(e);
@@ -186,7 +188,7 @@ export class ModeRunner {
     return { status: "wrong", detail: `The monitor still reports ${r.readBack === "hdmi1" ? "HDMI 1" : "HDMI 2"} after the switch to ${name}` };
   }
 
-  async #route(route: RouteId, enabled: boolean): Promise<void> {
+  async #route(route: ModeRoute, enabled: boolean): Promise<void> {
     const id = ROUTE_STEP[route];
     const r = this.#d.store.state.audio[route];
     if (enabled ? r.enabled && r.status === "streaming" : !r.enabled && r.status === "off") {

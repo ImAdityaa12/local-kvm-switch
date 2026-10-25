@@ -18,6 +18,7 @@ async function setup(opts: { unpaired?: boolean; endpoint?: boolean; edge?: bool
     input: { target: "gaming-pc", pending: null, engine: "stopped", hooksActive: false, clientConnected: false, ...(opts.edge !== undefined ? { edgeSwitch: opts.edge } : {}) },
     audio: {
       laptopToPc: { ...route, deviceId: devices.playback[0].id },
+      pcToLaptop: { ...route, deviceId: devices.playback[0].id },
       micToLaptop: { ...route, deviceId: devices.capture[0].id, virtualEndpoint: await audio.virtualEndpoint() },
     },
     devices,
@@ -243,5 +244,34 @@ test("without edge switching nothing waits at the edges in Gaming PC mode", asyn
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(store.state.input.engine, "stopped");
   assert.equal(store.state.input.hooksActive, false);
+  audio.dispose();
+});
+
+test("sound goes one way at a time: the gaming PC's sound on the laptop turns laptop audio off, and back", async () => {
+  const { store, controller, audio } = await setup();
+  await controller.handle({ type: "audio.setEnabled", route: "laptopToPc", enabled: true });
+  await controller.handle({ type: "audio.setEnabled", route: "micToLaptop", enabled: true });
+
+  await controller.handle({ type: "audio.setEnabled", route: "pcToLaptop", enabled: true });
+  assert.equal(store.state.audio.pcToLaptop.status, "streaming");
+  assert.equal(store.state.audio.laptopToPc.enabled, false);
+  assert.equal(store.state.audio.laptopToPc.status, "off");
+  // The mic is a different path and stays on.
+  assert.equal(store.state.audio.micToLaptop.status, "streaming");
+  assert.ok(store.state.events.some((e) => e.message === "Laptop audio stopped (gaming PC audio on the laptop turned on; sound goes one way at a time)"));
+
+  await controller.handle({ type: "audio.setEnabled", route: "laptopToPc", enabled: true });
+  assert.equal(store.state.audio.laptopToPc.status, "streaming");
+  assert.equal(store.state.audio.pcToLaptop.enabled, false);
+  assert.equal(store.state.audio.pcToLaptop.status, "off");
+  audio.dispose();
+});
+
+test("the gaming PC's sound on the laptop records a playback device of the gaming PC", async () => {
+  const { store, controller, audio } = await setup();
+  const other = store.state.devices.playback[1];
+  await controller.handle({ type: "audio.setDevice", route: "pcToLaptop", deviceId: other.id });
+  assert.equal(store.state.audio.pcToLaptop.deviceId, other.id);
+  await assert.rejects(controller.handle({ type: "audio.setDevice", route: "pcToLaptop", deviceId: store.state.devices.capture[0].id }), /no longer present/);
   audio.dispose();
 });
